@@ -282,16 +282,31 @@ app/
 
 Este projeto foi desenvolvido com **ferramentas de IA generativa** sob a metodologia de **Especificação Direcionada (SDD)**: requisitos, regras de negócio e cenários BDD foram definidos antes da implementação (`docs/requisitos.md`), e o código passou por **revisão humana rigorosa** (code review, testes unitários e de integração com ~88% de cobertura). A IA acelerou boilerplate e documentação; a correção financeira e a coerência arquitetural são validadas pela suíte de testes e pela rastreabilidade requisito → código → teste documentada em `docs/`.
 
+### Code review
+
+- **Revisão humana** em pull requests (template em [`.github/pull_request_template.md`](.github/pull_request_template.md))
+- **Cursor Bugbot** em PRs com regras financeiras em [`.cursor/BUGBOT.md`](.cursor/BUGBOT.md) (ledger, idempotência, concorrência, KYC)
+- Ative o Bugbot no [dashboard do Cursor](https://cursor.com/dashboard) para o repositório `MariaHilmar/paycore`
+
 ---
 
 ## Roadmap
 
-Entregue além do MVP:
+### MVP (entregue)
 
-- [x] **Saque PIX** (tipo `PIX_OUT`) — debita a conta, espelho do depósito
-- [x] **Conciliação** (admin) — cruza ledger × transações, prova a soma-zero e detecta drift
+- [x] **Cadastro, login JWT e gate KYC** (`/dev/verify-me`)
+- [x] **Ledger de partidas dobradas** - saldo derivado do histórico, dinheiro em centavos (`int`)
+- [x] **Depósito PIX** (`PIX_IN`) - criação de cobrança + confirmação (`/pay`) com idempotência
+- [x] **Transferências P2P** - débito/crédito entre contas com `SELECT FOR UPDATE` e `Idempotency-Key`
+- [x] **Saldo e extrato** - consulta derivada do ledger
+- [x] **Infra e qualidade** - Docker Compose, migrations Alembic, CI e documentação SDD
 
-Próximas evoluções:
+### Evolução 1 (entregue)
+
+- [x] **Saque PIX** (tipo `PIX_OUT`) - debita a conta, espelho do depósito
+- [x] **Conciliação (admin)** - cruza ledger × transações, prova a soma-zero e detecta drift
+
+### Próximas evoluções
 
 - [ ] Motor de antifraude (`FraudService` antes do `PaymentService.create_transfer`)
 - [ ] KYC com upload de documento (substitui a flag `is_verified` por uma máquina de estados)
