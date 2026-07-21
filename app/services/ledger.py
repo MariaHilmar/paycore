@@ -46,7 +46,9 @@ class LedgerService:
     async def get_balance(self, account_id: uuid.UUID) -> int:
         credit = func.coalesce(
             func.sum(
-                case((LedgerEntry.entry_type == LedgerEntryType.CREDIT, LedgerEntry.amount), else_=0)
+                case(
+                    (LedgerEntry.entry_type == LedgerEntryType.CREDIT, LedgerEntry.amount), else_=0
+                )
             ),
             0,
         )
@@ -135,7 +137,9 @@ class LedgerService:
         self, account_id: uuid.UUID, page: int, page_size: int
     ) -> tuple[list[LedgerEntry], int]:
         count_stmt = (
-            select(func.count()).select_from(LedgerEntry).where(LedgerEntry.account_id == account_id)
+            select(func.count())
+            .select_from(LedgerEntry)
+            .where(LedgerEntry.account_id == account_id)
         )
         total = (await self.session.execute(count_stmt)).scalar_one()
 

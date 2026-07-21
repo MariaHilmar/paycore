@@ -71,9 +71,7 @@ class ReconciliationService:
         )
         transactions_by_status = {str(status): count for status, count in status_rows.all()}
 
-        totals = (
-            await self.session.execute(select(_credit_sum, _debit_sum))
-        ).one()
+        totals = (await self.session.execute(select(_credit_sum, _debit_sum))).one()
         total_credit_cents, total_debit_cents = int(totals[0]), int(totals[1])
 
         discrepancies = await self._find_unbalanced_transactions()
@@ -99,9 +97,7 @@ class ReconciliationService:
             .join(LedgerEntry, LedgerEntry.transaction_id == Transaction.id, isouter=True)
             .where(Transaction.status == TransactionStatus.COMPLETED)
             .group_by(Transaction.id, Transaction.amount)
-            .having(
-                (_debit_sum != _credit_sum) | (_credit_sum != Transaction.amount)
-            )
+            .having((_debit_sum != _credit_sum) | (_credit_sum != Transaction.amount))
         )
         rows = await self.session.execute(stmt)
         return [

@@ -47,8 +47,12 @@ async def test_creating_deposit_twice_with_same_key_returns_same_transaction(db_
     payment = PaymentService(db_session)
     key = str(uuid.uuid4())
 
-    first = await payment.create_deposit(account_id=account.id, amount_cents=1_000, idempotency_key=key)
-    second = await payment.create_deposit(account_id=account.id, amount_cents=1_000, idempotency_key=key)
+    first = await payment.create_deposit(
+        account_id=account.id, amount_cents=1_000, idempotency_key=key
+    )
+    second = await payment.create_deposit(
+        account_id=account.id, amount_cents=1_000, idempotency_key=key
+    )
 
     assert first.id == second.id
 

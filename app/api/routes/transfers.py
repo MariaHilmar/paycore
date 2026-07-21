@@ -72,7 +72,9 @@ async def get_transfer(
     try:
         transaction = await service.get_transaction(transaction_id)
     except TransactionNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="transfer not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="transfer not found"
+        ) from exc
 
     if transaction.type != TransactionType.P2P:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="transfer not found")
