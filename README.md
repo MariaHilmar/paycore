@@ -274,6 +274,8 @@ app/
 | **[`docs/modelo-dados.md`](docs/modelo-dados.md)** | **Modelo de dados**: diagrama ER, dicionário de dados completo (tabela por tabela, coluna por coluna), enums nativos, índices/constraints e histórico de migrações |
 | **[`docs/SEGURANCA.md`](docs/SEGURANCA.md)** | **Segurança e limitações**: controles implementados, riscos conscientes do MVP, matriz de risco, roadmap de hardening e rastreabilidade controle → código → teste |
 
+**Case study no portfólio:** [mariahilmar.vercel.app/docs/case-study-paycore](https://mariahilmar.vercel.app/docs/case-study-paycore)
+
 ---
 
 ## Metodologia
