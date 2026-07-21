@@ -45,9 +45,7 @@ class LedgerEntryType(StrEnum):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     cpf: Mapped[str] = mapped_column(String(11), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -62,9 +60,7 @@ class User(Base):
 class Account(Base):
     __tablename__ = "accounts"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=True
     )
@@ -87,9 +83,7 @@ class Account(Base):
 class Transaction(Base):
     __tablename__ = "transactions"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     idempotency_key: Mapped[str] = mapped_column(
         String(64), unique=True, index=True, nullable=False
     )
@@ -104,9 +98,7 @@ class Transaction(Base):
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
     """Amount in cents (integer) - never use float for money."""
 
-    extra_data: Mapped[dict] = mapped_column(
-        "metadata", JSONB, default=dict, nullable=False
-    )
+    extra_data: Mapped[dict] = mapped_column("metadata", JSONB, default=dict, nullable=False)
     """Arbitrary context: pix txid, chave pix, counterparty account, etc. Column name: metadata."""
 
     created_at: Mapped[datetime] = mapped_column(
@@ -122,17 +114,13 @@ class Transaction(Base):
     ledger_entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="transaction")
 
     __mapper_args__ = {"eager_defaults": True}
-    __table_args__ = (
-        CheckConstraint("amount > 0", name="ck_transactions_amount_positive"),
-    )
+    __table_args__ = (CheckConstraint("amount > 0", name="ck_transactions_amount_positive"),)
 
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     transaction_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("transactions.id"), nullable=False, index=True
     )
@@ -152,6 +140,4 @@ class LedgerEntry(Base):
     transaction: Mapped["Transaction"] = relationship(back_populates="ledger_entries")
     account: Mapped["Account"] = relationship(back_populates="ledger_entries")
 
-    __table_args__ = (
-        CheckConstraint("amount > 0", name="ck_ledger_entries_amount_positive"),
-    )
+    __table_args__ = (CheckConstraint("amount > 0", name="ck_ledger_entries_amount_positive"),)

@@ -46,9 +46,7 @@ async def _register_verified(client: AsyncClient) -> tuple[str, str]:
     )
     assert resp.status_code == 201
 
-    resp = await client.post(
-        "/api/v1/auth/login", json={"email": email, "password": password}
-    )
+    resp = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert resp.status_code == 200
     token = resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -121,9 +119,7 @@ async def test_unverified_user_cannot_deposit(client: AsyncClient):
     await client.post(
         "/api/v1/auth/register", json={"email": email, "cpf": cpf, "password": password}
     )
-    login = await client.post(
-        "/api/v1/auth/login", json={"email": email, "password": password}
-    )
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
     token = login.json()["access_token"]
 
     resp = await client.post(
@@ -211,9 +207,7 @@ async def test_reconciliation_requires_admin_key(client: AsyncClient):
     resp = await client.get("/api/v1/admin/reconciliation")
     assert resp.status_code == 401
 
-    resp = await client.get(
-        "/api/v1/admin/reconciliation", headers={"X-Admin-Key": "wrong-key"}
-    )
+    resp = await client.get("/api/v1/admin/reconciliation", headers={"X-Admin-Key": "wrong-key"})
     assert resp.status_code == 401
 
 
@@ -239,9 +233,7 @@ async def test_reconciliation_reports_healthy_after_real_flows(client: AsyncClie
         json={"to_account_number": bob_account, "amount_cents": 5_000},
     )
 
-    resp = await client.get(
-        "/api/v1/admin/reconciliation", headers={"X-Admin-Key": admin_key}
-    )
+    resp = await client.get("/api/v1/admin/reconciliation", headers={"X-Admin-Key": admin_key})
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_healthy"] is True
