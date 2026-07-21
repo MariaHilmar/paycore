@@ -489,8 +489,8 @@ Escolhas conscientes de escopo para manter o MVP enxuto:
 | Conta de settlement única | Sharding de contas de settlement para maior throughput |
 | Conciliação sob demanda (endpoint) | Job agendado periódico + alertas em caso de discrepância |
 
-> **Entregue além do MVP:** saque PIX (`PIX_OUT`) e conciliação administrativa já estão implementados
-> — ambos como camadas somadas ao núcleo, sem qualquer reescrita do ledger.
+> **Fase 1 (entregue):** saque PIX (`PIX_OUT`) e conciliação administrativa já estão implementados
+> - ambos como camadas somadas ao núcleo do MVP, sem qualquer reescrita do ledger.
 
 O ponto central: **nenhuma dessas evoluções exige reescrever o núcleo**. O ledger, as transações e
 os testes existentes continuam válidos — cada item novo é uma camada adicionada, não uma substituição.

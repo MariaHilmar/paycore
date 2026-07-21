@@ -276,7 +276,7 @@ Este projeto utilizou **ferramentas de IA generativa** sob a metodologia de **Es
 
 1. **Especificação** - requisitos, regras de negócio (RN01-RN17), cenários BDD e ADRs definidos antes ou em paralelo à implementação (`docs/requisitos.md`, `docs/ARQUITETURA.md`).
 2. **Geração assistida** - boilerplate, documentação e parte da estrutura acelerados com IA generativa.
-3. **Revisão humana** - todo código passou por **code review manual**: invariantes financeiros, concorrência, idempotência e casos de borda validados por testes automatizados (33 testes, ~88% de cobertura).
+3. **Revisão humana** - todo código passou por **code review manual** e revisão automatizada em PRs (Cursor Bugbot, regras em `.cursor/BUGBOT.md`): invariantes financeiros, concorrência, idempotência e casos de borda validados por testes automatizados (33 testes, ~88% de cobertura).
 4. **Rastreabilidade** - cada regra e controle de segurança referencia arquivo e linha no repositório; matrizes de rastreabilidade ligam requisito → código → teste.
 
 A IA acelerou a produção; a **correção e a coerência** são responsabilidade da revisão humana e da suíte de testes.
