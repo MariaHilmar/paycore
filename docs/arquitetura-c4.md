@@ -92,13 +92,14 @@ C4Component
         Component(routes_accounts, "Rotas de Conta", "FastAPI APIRouter", "GET /accounts/me, /accounts/me/statement")
         Component(routes_pix, "Rotas de PIX", "FastAPI APIRouter", "POST /pix/deposit, /pix/deposit/{txid}/pay, /pix/withdraw")
         Component(routes_transfers, "Rotas de Transferência", "FastAPI APIRouter", "POST /transfers, GET /transfers/{id}")
-        Component(routes_admin, "Rotas Admin", "FastAPI APIRouter", "GET /admin/reconciliation")
+        Component(routes_admin, "Rotas Admin", "FastAPI APIRouter", "GET /admin/reconciliation; fila de fraude /admin/fraud/reviews (list/approve/reject)")
 
         Component(deps, "Dependências Transversais", "FastAPI Depends", "Sessão de BD, usuário atual, conta verificada (KYC), Idempotency-Key, guarda de admin")
 
         Component(auth_service, "AuthService", "Serviço de domínio", "Cadastro, autenticação, verificação KYC")
-        Component(payment_service, "PaymentService", "Serviço de domínio", "Orquestra depósito, saque e transferência; aplica idempotência")
+        Component(payment_service, "PaymentService", "Serviço de domínio", "Orquestra depósito, saque e transferência; idempotência; fila de revisão de fraude")
         Component(ledger_service, "LedgerService", "Serviço de domínio", "Núcleo de partidas dobradas: saldo, lançamentos, travas de linha, extrato")
+        Component(fraud_service, "FraudService", "Serviço de domínio", "Rule engine de antifraude: valor, velocidade, limite diário -> decisão mais severa")
         Component(reconciliation_service, "ReconciliationService", "Serviço de domínio", "Cruza ledger x transações; detecta discrepâncias contábeis")
 
         Component(models, "Modelos ORM", "SQLAlchemy 2.0", "User, Account, Transaction, LedgerEntry - com constraints (UNIQUE, CHECK, FK)")
@@ -123,6 +124,7 @@ C4Component
     Rel(routes_pix, payment_service, "chama")
     Rel(routes_transfers, payment_service, "chama")
     Rel(routes_admin, reconciliation_service, "chama")
+    Rel(routes_admin, payment_service, "chama (fila de revisão)")
 
     Rel(deps, security, "valida token via")
     Rel(deps, models, "consulta usuário/conta via")
@@ -130,8 +132,10 @@ C4Component
     Rel(auth_service, security, "usa (hash/verify de senha)")
     Rel(auth_service, models, "lê/escreve")
     Rel(payment_service, ledger_service, "orquestra")
+    Rel(payment_service, fraud_service, "triagem antes de liquidar")
     Rel(payment_service, models, "lê/escreve")
     Rel(ledger_service, models, "lê/escreve")
+    Rel(fraud_service, models, "lê ledger (velocidade/limite)")
     Rel(reconciliation_service, models, "lê (somente leitura)")
 
     Rel(routes_auth, schemas, "valida com")
@@ -171,13 +175,28 @@ classDiagram
     class PaymentService {
         +session: AsyncSession
         +ledger: LedgerService
+        +fraud: FraudService
         +create_deposit(account_id, amount_cents, idempotency_key) Transaction
         +confirm_deposit(txid) Transaction
         +create_withdrawal(account_id, amount_cents, idempotency_key) Transaction
         +create_transfer(from_account_id, to_account_number, amount_cents, idempotency_key) Transaction
+        +list_pending_reviews() list~Transaction~
+        +approve_review(transaction_id) Transaction
+        +reject_review(transaction_id) Transaction
         +get_transaction(transaction_id) Transaction
-        -_get_by_idempotency_key(key) Transaction
-        -_get_account_by_number(account_number) Account
+        -_screen(transaction, account_id, transaction_type, amount_cents) Transaction
+    }
+
+    class FraudService {
+        +session: AsyncSession
+        +rules: list~FraudRule~
+        +evaluate(ctx) FraudEvaluation
+    }
+
+    class FraudEvaluation {
+        +status: FraudStatus
+        +triggered: list~RuleOutcome~
+        +is_approved: bool
     }
 
     class AuthService {
@@ -227,6 +246,7 @@ classDiagram
         +idempotency_key: str
         +type: TransactionType
         +status: TransactionStatus
+        +fraud_status: FraudStatus?
         +amount: int
         +extra_data: dict
     }
@@ -240,7 +260,10 @@ classDiagram
     }
 
     PaymentService "1" --> "1" LedgerService : orquestra
+    PaymentService "1" --> "1" FraudService : triagem
     PaymentService ..> Transaction : cria/lê
+    FraudService ..> FraudEvaluation : produz
+    FraudService ..> LedgerEntry : lê (velocidade/limite)
     LedgerService ..> LedgerEntry : cria
     LedgerService ..> Account : lê/trava
     ReconciliationService ..> ReconciliationReport : produz
@@ -276,6 +299,7 @@ Referência rápida de onde cada componente do Nível 3 vive no repositório:
 | AuthService | `app/services/auth.py` |
 | PaymentService | `app/services/payment.py` |
 | LedgerService | `app/services/ledger.py` |
+| FraudService | `app/services/fraud.py` |
 | ReconciliationService | `app/services/reconciliation.py` |
 | Modelos ORM | `app/db/models.py`, `app/db/base.py`, `app/db/session.py` |
 | Schemas Pydantic | `app/schemas/*.py` |

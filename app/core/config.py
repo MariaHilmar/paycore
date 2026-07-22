@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # Admin (service-to-service key for internal/ops endpoints like reconciliation)
     ADMIN_API_KEY: str = "dev-admin-key-change-in-production"
 
+    # Fraud screening thresholds (all monetary values in cents)
+    FRAUD_REVIEW_AMOUNT_CENTS: int = 500_000  # R$ 5.000,00 -> hold for manual review
+    FRAUD_BLOCK_AMOUNT_CENTS: int = 5_000_000  # R$ 50.000,00 -> hard block
+    FRAUD_VELOCITY_WINDOW_SECONDS: int = 60
+    FRAUD_VELOCITY_MAX_DEBITS: int = 5  # reaching this many debits in the window -> review
+    FRAUD_DAILY_DEBIT_LIMIT_CENTS: int = 10_000_000  # R$ 100.000,00 in 24h -> block
+
     # API
     API_V1_STR: str = "/api/v1"
 

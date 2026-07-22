@@ -206,13 +206,15 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | **Justificativa** | Simplicidade do MVP; refresh/revogação adiciona tabela de sessões e complexidade |
 | **Mitigação em produção** | Refresh token rotativo, blacklist de JWT, expiração curta (15-30 min) |
 
-### LC08 - Sem antifraude, limites de valor e auditoria de segurança
+### LC08 - Antifraude sem trava de concorrência no limite diário, sem device fingerprint nem log de eventos
 
 | | |
 |---|---|
-| **Risco** | Conta comprometida pode movimentar valores ilimitados sem análise de risco |
-| **Justificativa** | `FraudService` planejado no roadmap; foco atual em correção contábil, não em scoring |
-| **Mitigação em produção** | Regras de velocidade, valor máximo, device fingerprint, log de eventos de segurança |
+| **Risco** | O motor antifraude (`FraudService`) já barra/retém saídas por valor, velocidade e limite diário **antes** da liquidação (RN18-RN21). Porém a regra de limite diário lê o total debitado sem lock: duas saídas concorrentes podem ser avaliadas antes de qualquer débito ser registrado e, juntas, ultrapassar o limite. Também não há device fingerprint nem trilha de eventos de segurança. |
+| **Justificativa** | A triagem cobre o cenário principal do MVP; serialização estrita do limite diário exigiria lock por conta/janela e o scoring comportamental está fora do escopo educacional |
+| **Mitigação em produção** | Lock pessimista ou contador transacional por conta na janela de 24h; device fingerprint; log de eventos de segurança; scoring de risco |
+
+> Código: `FraudService`, `DailyDebitLimitRule` (`app/services/fraud.py`); `PaymentService._screen` (`app/services/payment.py`).
 
 ### LC09 - Swagger (`/docs`) exposto
 
@@ -248,6 +250,7 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | R08 | Enumeração no cadastro | Média | Baixo | Aceito (MVP) | LC04 |
 | R09 | Overdraft por concorrência | Média | Alto | Mitigado | Ledger + `SELECT FOR UPDATE` (RN05, RN06) |
 | R10 | Crédito duplicado em webhook | Média | Alto | Mitigado | RN09; `confirm_deposit` com lock na transação |
+| R11 | Movimentação de saída de alto risco | Média | Alto | Mitigado (parcial) | Antifraude RN18-RN21; limite diário sem lock (LC08) |
 
 ---
 
@@ -262,9 +265,10 @@ Ordem sugerida de evolução (cada item = commit/PR visível no GitHub):
 | 3 | Falhar no startup com segredos default em produção | Baixo |
 | 4 | Checar `AccountStatus.BLOCKED` nas dependências | Baixo |
 | 5 | Rate limiting (`slowapi`) em login e register | Médio |
-| 6 | `FraudService` com regras básicas | Médio |
-| 7 | KYC com upload e máquina de estados | Alto |
-| 8 | Webhook assíncrono com assinatura HMAC | Alto |
+| 6 | ~~`FraudService` com regras básicas~~ **(entregue - RN18-RN21)** | Médio |
+| 7 | Serializar limite diário de antifraude (lock por conta/janela) | Médio |
+| 8 | KYC com upload e máquina de estados | Alto |
+| 9 | Webhook assíncrono com assinatura HMAC | Alto |
 
 Itens 1-4 são **pré-requisitos mínimos** antes de qualquer deploy público.
 
@@ -276,7 +280,7 @@ Este projeto utilizou **ferramentas de IA generativa** sob a metodologia de **Es
 
 1. **Especificação** - requisitos, regras de negócio (RN01-RN17), cenários BDD e ADRs definidos antes ou em paralelo à implementação (`docs/requisitos.md`, `docs/ARQUITETURA.md`).
 2. **Geração assistida** - boilerplate, documentação e parte da estrutura acelerados com IA generativa.
-3. **Revisão humana** - todo código passou por **code review manual** e revisão automatizada em PRs (Cursor Bugbot, regras em `.cursor/BUGBOT.md`): invariantes financeiros, concorrência, idempotência e casos de borda validados por testes automatizados (33 testes, ~88% de cobertura).
+3. **Revisão humana** - todo código passou por **code review manual** e revisão automatizada em PRs (Cursor Bugbot, regras em `.cursor/BUGBOT.md`): invariantes financeiros, concorrência, idempotência e casos de borda validados por testes automatizados (48 testes, incluindo a triagem antifraude).
 4. **Rastreabilidade** - cada regra e controle de segurança referencia arquivo e linha no repositório; matrizes de rastreabilidade ligam requisito → código → teste.
 
 A IA acelerou a produção; a **correção e a coerência** são responsabilidade da revisão humana e da suíte de testes.
@@ -296,6 +300,7 @@ A IA acelerou a produção; a **correção e a coerência** são responsabilidad
 | SC08 (admin key) | `app/api/deps.py`, `app/api/routes/admin.py` | `tests/test_api.py::test_reconciliation_requires_admin_key` |
 | SC10 (validação entrada) | `app/schemas/auth.py`, `app/schemas/transaction.py` | `tests/test_api.py::test_transfer_insufficient_balance_returns_422` |
 | RN09 (webhook idempotente) | `app/services/payment.py` (`confirm_deposit`) | `tests/test_deposit.py::test_concurrent_confirmation_credits_the_account_only_once` |
+| RN18-RN21 (antifraude precede liquidação) | `app/services/fraud.py`; `app/services/payment.py` (`_screen`, `approve_review`, `reject_review`) | `tests/test_fraud.py`; `tests/test_api.py::test_large_transfer_is_blocked_by_fraud`, `test_medium_transfer_is_held_for_review_then_approved` |
 | LC02 (webhook sem auth) | `app/api/routes/pix.py` | Documentado; sem teste de penetração no MVP |
 
 ---
