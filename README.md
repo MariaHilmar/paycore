@@ -216,10 +216,29 @@ curl -s -X POST $BASE/transfers \
 ## Testes
 
 ```bash
-# Requer um PostgreSQL rodando
+# Windows (recomendado)
+.\scripts\test.ps1
+
+# Linux/macOS/Git Bash
+./scripts/test.sh
+
+# Manual (requer PostgreSQL em localhost:5432/paycore_test)
 TEST_DATABASE_URL=postgresql+psycopg://paycore:paycore@localhost:5432/paycore_test \
   pytest tests/ -v --cov=app --cov-report=term-missing
 ```
+
+O script usa o Python da `.venv`, verifica conexão com o Postgres e roda `ruff`, `black --check` e `pytest`.
+Opções: `-Quick` (sem cobertura), `-LintOnly`, `-SkipLint`.
+
+### Política de revisão (CI/CD)
+
+Push direto em `main` está **bloqueado**. Todo merge passa por **pull request** com:
+
+1. CI verde (Lint + Test)
+2. Pelo menos **1 aprovação** de revisão
+3. Conversas do PR resolvidas
+
+Configurar em outros repositórios: `.\scripts\setup-branch-protection.ps1` (requer `gh auth login` com permissão admin).
 
 São **48 testes** (cobertura ~89%) em dois níveis:
 

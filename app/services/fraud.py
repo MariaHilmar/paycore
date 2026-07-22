@@ -56,8 +56,7 @@ class FraudRule(Protocol):
 
     name: str
 
-    async def evaluate(self, session: AsyncSession, ctx: FraudContext) -> RuleOutcome | None:
-        ...
+    async def evaluate(self, session: AsyncSession, ctx: FraudContext) -> RuleOutcome | None: ...
 
 
 async def _debit_total_since(session: AsyncSession, account_id: uuid.UUID, since: datetime) -> int:
