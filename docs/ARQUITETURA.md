@@ -275,6 +275,43 @@ transferência — sem código novo de concorrência. Um saque sem saldo é regi
 de volta a zero. Depósito a leva a −X (dinheiro entrou), saque a devolve a 0 (dinheiro saiu). O sistema
 permanece em soma-zero em todos os cenários.
 
+### 5.4 Antifraude (screening antes da liquidação)
+
+Transferências e saques passam por um **motor de regras** (`FraudService`) antes de qualquer lançamento
+no ledger. O motor executa cada regra e adota a decisão **mais severa** (`APPROVED < REVIEW < BLOCKED`).
+Essa decisão é persistida em `transactions.fraud_status` e determina o desfecho.
+
+```mermaid
+flowchart TD
+    Start["create_transfer / create_withdrawal<br/>(transação PENDING criada)"] --> Screen["FraudService.evaluate"]
+    Screen --> Rules{"regras:<br/>valor · velocidade · limite diário<br/>→ decisão mais severa"}
+    Rules -->|APPROVED| Post["post_double_entry<br/>→ COMPLETED"]
+    Rules -->|REVIEW| Hold["retém: PENDING + REVIEW<br/>dinheiro não se move"]
+    Rules -->|BLOCKED| Fail["FAILED + BLOCKED<br/>→ 403, dinheiro não se move"]
+    Hold --> Queue["fila /admin/fraud/reviews"]
+    Queue -->|operador aprova| Settle["re-valida saldo<br/>→ post_double_entry → COMPLETED"]
+    Queue -->|operador rejeita| Reject["FAILED + BLOCKED"]
+    Settle -->|saldo insuficiente agora| FailLate["FAILED → 422"]
+```
+
+**Decisões de design que mantêm o núcleo intacto:**
+
+- O `FraudService` roda **como um gate** dentro do `PaymentService` (`_screen`), antes do `post_double_entry` —
+  exatamente o ponto de extensão previsto desde o início (ver ADR-06). O `LedgerService` **não muda**.
+- As regras são **injetáveis** (`FraudService(session, rules=[...])`), o que permite testes determinísticos
+  sem depender dos thresholds de produção, e trocar/estender o conjunto de regras sem tocar no engine.
+- As regras de **velocidade** e **limite diário** consultam `ledger_entries` (débitos reais, colunas
+  indexadas), não a tabela de transações — refletem dinheiro que efetivamente saiu da conta.
+- Uma transação **retida** (`REVIEW`) fica `PENDING` sem lançamentos; a **aprovação manual** executa a
+  liquidação naquele momento, **re-verificando o saldo** (que pode ter mudado na fila). Isso trata o caso
+  real em que fundos foram gastos enquanto a transação aguardava revisão.
+- A idempotência continua valendo: reenviar uma transferência retida (mesma `Idempotency-Key`) devolve a
+  mesma transação em revisão, sem criar duplicata.
+
+Depósitos (`PIX_IN`) **não** são triados — dinheiro entrando não caracteriza o risco deste motor. A
+conciliação (§8.1) permanece saudável, pois transações retidas/bloqueadas ficam `PENDING`/`FAILED` sem
+lançamentos, e o cruzamento só considera transações `COMPLETED`.
+
 ---
 
 ## 6. Concorrência e consistência
@@ -406,8 +443,9 @@ Resumo dos controles implementados. Para análise completa (controles SC01-SC11,
 | Autorização de recurso | `GET /transfers/{id}` só devolve a transferência se a conta atual for origem ou destino. |
 | Webhook PIX | `/pay` é intencionalmente **não autenticado** — simula um callback servidor-a-servidor, não uma ação de usuário. |
 | Endpoints admin | Protegidos por `X-Admin-Key` (service-to-service), comparada em tempo constante com `secrets.compare_digest`. |
+| Antifraude | Transferências e saques passam por triagem de risco antes de liquidar (§5.4); suspeitos são bloqueados ou retidos para revisão manual. |
 
-> ⚠️ **Limitações conscientes do MVP** (documentadas em [`SEGURANCA.md`](SEGURANCA.md)): `/dev/verify-me` aberto para demo, `/pay` sem assinatura de webhook, sem rate limiting, sem antifraude. Não faça deploy público sem tratar esses pontos.
+> ⚠️ **Limitações conscientes do MVP** (documentadas em [`SEGURANCA.md`](SEGURANCA.md)): `/dev/verify-me` aberto para demo, `/pay` sem assinatura de webhook, sem rate limiting. A antifraude cobre valor/velocidade/limite diário, mas não substitui scoring com histórico e listas. Não faça deploy público sem tratar esses pontos.
 
 ---
 
@@ -474,6 +512,13 @@ humano fica na apresentação.
 API totalmente assíncrona exige driver async. → `create_async_engine` com `postgresql+psycopg`. →
 No Windows requer `SelectorEventLoop` (configurado em `tests/conftest.py`).
 
+**ADR-06 · Antifraude como gate injetável, não como reescrita do fluxo.**
+Fluxos de saída precisam de triagem de risco sem duplicar lógica nem acoplar regras às rotas. → Um
+`FraudService` (rule engine com regras injetáveis) roda em `PaymentService._screen`, antes do
+`post_double_entry`; `fraud_status` é uma coluna nova e nullable (não altera linhas existentes); a
+retenção reusa o estado `PENDING` e a fila de revisão reusa a auth de admin (`X-Admin-Key`). → Fraude
+entra sem tocar no `LedgerService`; regras evoluem sem tocar no engine; testes usam regras determinísticas.
+
 ---
 
 ## 13. Limitações conhecidas e evolução
@@ -485,13 +530,14 @@ Escolhas conscientes de escopo para manter o MVP enxuto:
 | Leitura de saldo agrega o ledger inteiro | Snapshots periódicos de saldo + soma incremental |
 | `/pay` síncrono e não autenticado | Webhook assíncrono (fila Redis) com verificação de assinatura |
 | KYC é uma flag booleana | Máquina de estados + upload/análise de documentos |
-| Sem antifraude | `FraudService` inserido antes do `post_double_entry` |
+| Regras de fraude são síncronas e por-transação | Scoring assíncrono, features históricas, listas e modelos de ML |
 | Conta de settlement única | Sharding de contas de settlement para maior throughput |
 | Conciliação sob demanda (endpoint) | Job agendado periódico + alertas em caso de discrepância |
 
-> **Fase 1 (entregue):** saque PIX (`PIX_OUT`) e conciliação administrativa já estão implementados
-> - ambos como camadas somadas ao núcleo do MVP, sem qualquer reescrita do ledger.
+> **Fase 1 (entregue):** saque PIX (`PIX_OUT`) e conciliação administrativa.
+> **Fase 2 (entregue):** motor de antifraude (`FraudService`) com fila de revisão manual.
+> Todos como camadas somadas ao núcleo do MVP, sem qualquer reescrita do ledger.
 
 O ponto central: **nenhuma dessas evoluções exige reescrever o núcleo**. O ledger, as transações e
 os testes existentes continuam válidos — cada item novo é uma camada adicionada, não uma substituição.
-O saque e a conciliação são a prova disso: entraram sem tocar em `LedgerService.post_double_entry`.
+Saque, conciliação e antifraude são a prova disso: entraram sem tocar em `LedgerService.post_double_entry`.

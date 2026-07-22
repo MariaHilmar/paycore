@@ -9,6 +9,7 @@ from app.db.models import Account, TransactionType
 from app.schemas.transaction import TransferCreate, TransferOut
 from app.services.payment import (
     AccountNotFoundError,
+    FraudBlockedError,
     InsufficientBalanceError,
     PaymentService,
     SelfTransferError,
@@ -46,6 +47,10 @@ async def create_transfer(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="destination account not found"
         ) from exc
+    except FraudBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="transaction blocked by fraud screening"
+        ) from exc
     except InsufficientBalanceError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="insufficient balance"
@@ -55,6 +60,7 @@ async def create_transfer(
     return TransferOut(
         id=transaction.id,
         status=transaction.status,
+        fraud_status=transaction.fraud_status,
         amount_cents=transaction.amount,
         from_account_number=account.account_number,
         to_account_number=await _account_number(session, to_account_id),
@@ -88,6 +94,7 @@ async def get_transfer(
     return TransferOut(
         id=transaction.id,
         status=transaction.status,
+        fraud_status=transaction.fraud_status,
         amount_cents=transaction.amount,
         from_account_number=await _account_number(session, from_account_id),
         to_account_number=await _account_number(session, to_account_id),

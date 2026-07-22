@@ -212,6 +212,91 @@ async def test_reconciliation_requires_admin_key(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_large_transfer_is_blocked_by_fraud(client: AsyncClient):
+    from app.core.config import get_settings
+
+    block_amount = get_settings().FRAUD_BLOCK_AMOUNT_CENTS
+    alice_token, _ = await _register_verified(client)
+    _, bob_account = await _register_verified(client)
+
+    # Fraud screening runs before the balance check, so no funding is needed:
+    # an amount at/above the block threshold is rejected outright.
+    resp = await client.post(
+        "/api/v1/transfers",
+        headers={
+            "Authorization": f"Bearer {alice_token}",
+            "Idempotency-Key": str(uuid.uuid4()),
+        },
+        json={"to_account_number": bob_account, "amount_cents": block_amount},
+    )
+    assert resp.status_code == 403
+
+
+async def _fund(client: AsyncClient, headers: dict, amount_cents: int) -> None:
+    resp = await client.post(
+        "/api/v1/pix/deposit",
+        headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
+        json={"amount_cents": amount_cents},
+    )
+    txid = resp.json()["txid"]
+    await client.post(f"/api/v1/pix/deposit/{txid}/pay")
+
+
+@pytest.mark.asyncio
+async def test_medium_transfer_is_held_for_review_then_approved(client: AsyncClient):
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    review_amount = settings.FRAUD_REVIEW_AMOUNT_CENTS
+    admin_key = settings.ADMIN_API_KEY
+
+    alice_token, _ = await _register_verified(client)
+    _, bob_account = await _register_verified(client)
+    alice_headers = {"Authorization": f"Bearer {alice_token}"}
+    await _fund(client, alice_headers, review_amount + 100_000)
+
+    # A review-range amount is held (201, PENDING, fraud_status REVIEW), money unmoved.
+    resp = await client.post(
+        "/api/v1/transfers",
+        headers={**alice_headers, "Idempotency-Key": str(uuid.uuid4())},
+        json={"to_account_number": bob_account, "amount_cents": review_amount},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "PENDING"
+    assert body["fraud_status"] == "REVIEW"
+    held_id = body["id"]
+
+    balance = (await client.get("/api/v1/accounts/me", headers=alice_headers)).json()[
+        "balance_cents"
+    ]
+    assert balance == review_amount + 100_000  # unchanged while held
+
+    # It shows up in the admin review queue.
+    resp = await client.get("/api/v1/admin/fraud/reviews", headers={"X-Admin-Key": admin_key})
+    assert resp.status_code == 200
+    assert held_id in [item["transaction_id"] for item in resp.json()["items"]]
+
+    # Approving it settles the transfer.
+    resp = await client.post(
+        f"/api/v1/admin/fraud/reviews/{held_id}/approve", headers={"X-Admin-Key": admin_key}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "COMPLETED"
+
+    balance = (await client.get("/api/v1/accounts/me", headers=alice_headers)).json()[
+        "balance_cents"
+    ]
+    assert balance == 100_000
+
+
+@pytest.mark.asyncio
+async def test_fraud_review_queue_requires_admin_key(client: AsyncClient):
+    resp = await client.get("/api/v1/admin/fraud/reviews")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_reports_healthy_after_real_flows(client: AsyncClient):
     from app.core.config import get_settings
 

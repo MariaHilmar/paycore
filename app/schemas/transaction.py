@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.db.models import TransactionStatus
+from app.db.models import FraudStatus, TransactionStatus
 
 
 class PixDepositCreate(BaseModel):
@@ -25,6 +25,7 @@ class PixWithdrawCreate(BaseModel):
 class PixWithdrawOut(BaseModel):
     id: uuid.UUID
     status: TransactionStatus
+    fraud_status: FraudStatus | None = None
     amount_cents: int
     created_at: datetime
 
@@ -37,6 +38,7 @@ class TransferCreate(BaseModel):
 class TransferOut(BaseModel):
     id: uuid.UUID
     status: TransactionStatus
+    fraud_status: FraudStatus | None = None
     amount_cents: int
     from_account_number: str
     to_account_number: str

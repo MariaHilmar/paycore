@@ -10,6 +10,7 @@ from app.schemas.transaction import (
     PixWithdrawOut,
 )
 from app.services.payment import (
+    FraudBlockedError,
     InsufficientBalanceError,
     PaymentService,
     TransactionNotFoundError,
@@ -58,6 +59,10 @@ async def create_withdrawal(
             amount_cents=data.amount_cents,
             idempotency_key=idempotency_key,
         )
+    except FraudBlockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="transaction blocked by fraud screening"
+        ) from exc
     except InsufficientBalanceError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="insufficient balance"
@@ -65,6 +70,7 @@ async def create_withdrawal(
     return PixWithdrawOut(
         id=transaction.id,
         status=transaction.status,
+        fraud_status=transaction.fraud_status,
         amount_cents=transaction.amount,
         created_at=transaction.created_at,
     )

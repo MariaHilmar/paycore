@@ -42,6 +42,18 @@ class LedgerEntryType(StrEnum):
     CREDIT = "CREDIT"
 
 
+class FraudStatus(StrEnum):
+    """Outcome of fraud screening for a money-moving transaction.
+
+    Orthogonal to TransactionStatus: a transaction can be COMPLETED/APPROVED,
+    FAILED/BLOCKED, or PENDING/REVIEW (held awaiting manual resolution).
+    """
+
+    APPROVED = "APPROVED"
+    REVIEW = "REVIEW"
+    BLOCKED = "BLOCKED"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -95,6 +107,11 @@ class Transaction(Base):
         default=TransactionStatus.PENDING,
         nullable=False,
     )
+    fraud_status: Mapped[FraudStatus | None] = mapped_column(
+        SQLEnum(FraudStatus, name="fraud_status"), nullable=True, default=None
+    )
+    """Fraud screening outcome. NULL for flows not screened (e.g. deposits) and legacy rows."""
+
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
     """Amount in cents (integer) - never use float for money."""
 
