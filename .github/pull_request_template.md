@@ -17,4 +17,5 @@
 ```bash
 pytest tests/ -v
 ruff check app/ tests/
+black --check app/ tests/
 ```

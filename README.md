@@ -7,8 +7,8 @@ Sistema de ledger financeiro (fintech) enxuto — **contabilidade de partidas do
 [![CI](https://github.com/MariaHilmar/paycore/actions/workflows/ci.yml/badge.svg)](https://github.com/MariaHilmar/paycore/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688)
-![Tests](https://img.shields.io/badge/tests-33%20passing-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
+![Tests](https://img.shields.io/badge/tests-48%20passing-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen)
 
 ---
 
@@ -198,11 +198,18 @@ curl -s -X POST $BASE/transfers \
 | POST | `/api/v1/transfers` | Transferência P2P por número de conta |
 | GET | `/api/v1/transfers/{id}` | Detalhe de uma transferência |
 | GET | `/api/v1/admin/reconciliation` | Relatório de conciliação (header `X-Admin-Key`) |
+| GET | `/api/v1/admin/fraud/reviews` | Fila de transações retidas pela antifraude (header `X-Admin-Key`) |
+| POST | `/api/v1/admin/fraud/reviews/{id}/approve` | Libera uma transação retida (re-valida saldo) |
+| POST | `/api/v1/admin/fraud/reviews/{id}/reject` | Rejeita uma transação retida (→ `FAILED`) |
 | GET | `/health` | Health check |
 | GET | `/docs` | Swagger UI |
 
 > Todo `POST` que movimenta dinheiro exige o header `Idempotency-Key: <uuid>`.
-> O endpoint de conciliação exige o header `X-Admin-Key: <chave>` (service-to-service, não JWT).
+> Os endpoints administrativos (`/admin/*`) exigem o header `X-Admin-Key: <chave>` (service-to-service, não JWT).
+>
+> **Antifraude:** transferências e saques passam por triagem antes de liquidar. Valores muito altos, ou que estourem
+> o limite diário, são **bloqueados** (`403`); valores em faixa de revisão ficam **retidos** (`201` com `status=PENDING`
+> e `fraud_status=REVIEW`) até um operador aprovar/rejeitar pela fila `/admin/fraud/reviews`.
 
 ---
 
@@ -214,21 +221,23 @@ TEST_DATABASE_URL=postgresql+psycopg://paycore:paycore@localhost:5432/paycore_te
   pytest tests/ -v --cov=app --cov-report=term-missing
 ```
 
-São **33 testes** (cobertura ~88%) em dois níveis:
+São **48 testes** (cobertura ~89%) em dois níveis:
 
-**Testes de serviço** (lógica de domínio, direto no `PaymentService`/`LedgerService`/`ReconciliationService`):
+**Testes de serviço** (lógica de domínio, direto nos services):
 
 - **Ledger** — saldo derivado das entradas, invariante de partidas dobradas, rejeição por saldo insuficiente.
 - **Depósito** — crédito só após confirmação, idempotência do `/pay`, e **dupla confirmação concorrente credita apenas uma vez**.
 - **Saque** — debita a conta, é espelho do depósito (settlement volta a zero), saldo insuficiente vira `FAILED`, retry idempotente, e posta `DEBIT` no usuário / `CREDIT` no settlement.
 - **Transferência** — fluxo feliz, saldo insuficiente registrado como `FAILED`, auto-transferência bloqueada, retry idempotente, e **corrida entre duas transferências nunca causa overdraft** (exercita a trava real `SELECT FOR UPDATE` no Postgres).
+- **Antifraude** — cada regra isolada (valor, velocidade, limite diário), o engine escolhe a decisão **mais severa**, transação bloqueada não move dinheiro (`FAILED`), transação em revisão fica retida (`PENDING`), e a **liberação re-valida saldo** antes de liquidar (aprovar credita, rejeitar falha).
 - **Conciliação** — ledger saudável reconcilia, soma global zero após depósito+saque+transferência, e **detecta um ledger adulterado** (remoção de uma perna de débito é sinalizada como discrepância).
 
 **Testes de integração HTTP** (`tests/test_api.py`, via `httpx` + `ASGITransport`) — exercitam a stack
-completa (roteamento, validação, autenticação JWT, mapeamento de erros): fluxo ponta a ponta de
-depósito, saque e transferência; header de idempotência obrigatório; bloqueio de usuário não verificado (403);
-saldo insuficiente (422); credenciais inválidas (401); rota protegida sem token (401); conciliação exige
-`X-Admin-Key` (401 sem chave ou com chave incorreta).
+completa (roteamento, validação, autenticação JWT, mapeamento de erros): fluxos ponta a ponta de
+depósito, saque e transferência; transferência grande **bloqueada pela antifraude** (403); transferência em
+faixa de revisão **retida e depois aprovada** pela fila admin; header de idempotência obrigatório; bloqueio de
+usuário não verificado (403); saldo insuficiente (422); credenciais inválidas (401); rota protegida sem token (401);
+endpoints admin exigem `X-Admin-Key` (401 sem chave ou com chave incorreta).
 
 ---
 
@@ -248,9 +257,11 @@ app/
 │   └── models.py        # modelos ORM (SQLAlchemy 2.0 tipado)
 ├── schemas/             # modelos Pydantic v2 (request/response)
 └── services/
-    ├── ledger.py        # LedgerService: saldo, post_double_entry, extrato
-    ├── payment.py       # PaymentService: depósito, confirmação, transferência + idempotência
-    └── auth.py          # AuthService: registro, autenticação, verificação
+    ├── ledger.py           # LedgerService: saldo, post_double_entry, extrato
+    ├── payment.py          # PaymentService: depósito, saque, transferência, idempotência, fila de revisão
+    ├── fraud.py            # FraudService: rule engine de antifraude (valor, velocidade, limite diário)
+    ├── reconciliation.py   # ReconciliationService: conciliação contábil
+    └── auth.py             # AuthService: registro, autenticação, verificação
 ```
 
 **Decisões-chave:**
@@ -280,7 +291,7 @@ app/
 
 ## Metodologia
 
-Este projeto foi desenvolvido com **ferramentas de IA generativa** sob a metodologia de **Especificação Direcionada (SDD)**: requisitos, regras de negócio e cenários BDD foram definidos antes da implementação (`docs/requisitos.md`), e o código passou por **revisão humana rigorosa** (code review, testes unitários e de integração com ~88% de cobertura). A IA acelerou boilerplate e documentação; a correção financeira e a coerência arquitetural são validadas pela suíte de testes e pela rastreabilidade requisito → código → teste documentada em `docs/`.
+Este projeto foi desenvolvido com **ferramentas de IA generativa** sob a metodologia de **Especificação Direcionada (SDD)**: requisitos, regras de negócio e cenários BDD foram definidos antes da implementação (`docs/requisitos.md`), e o código passou por **revisão humana rigorosa** (code review, testes unitários e de integração com ~89% de cobertura). A IA acelerou boilerplate e documentação; a correção financeira e a coerência arquitetural são validadas pela suíte de testes e pela rastreabilidade requisito → código → teste documentada em `docs/`.
 
 ### Code review
 
@@ -306,9 +317,12 @@ Este projeto foi desenvolvido com **ferramentas de IA generativa** sob a metodol
 - [x] **Saque PIX** (tipo `PIX_OUT`) - debita a conta, espelho do depósito
 - [x] **Conciliação (admin)** - cruza ledger × transações, prova a soma-zero e detecta drift
 
+### Evolução 2 (entregue)
+
+- [x] **Motor de antifraude** (`FraudService`) - rule engine (valor, velocidade, limite diário) rodando como gate antes da liquidação, com fila de revisão manual (`/admin/fraud/reviews`)
+
 ### Próximas evoluções
 
-- [ ] Motor de antifraude (`FraudService` antes do `PaymentService.create_transfer`)
 - [ ] KYC com upload de documento (substitui a flag `is_verified` por uma máquina de estados)
 - [ ] Webhooks assíncronos (o `/pay` vira um job em Redis; tabela de eventos de webhook)
 - [ ] Taxa de serviço (novo tipo `FEE`; o ledger já suporta nativamente)

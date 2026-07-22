@@ -24,7 +24,7 @@ O **PayCore** é um sistema de carteira digital (fintech) que oferece cadastro d
 
 **Problema que resolve:** sistemas financeiros que armazenam saldo como uma coluna mutável (`accounts.balance`) estão sujeitos a corrupção silenciosa por bugs, race conditions ou rollbacks parciais, e não oferecem trilha de auditoria. O PayCore resolve isso derivando o saldo, a qualquer momento, de um log imutável de lançamentos contábeis (`ledger_entries`), garantindo que o dinheiro nunca seja criado, destruído ou perdido - apenas movido entre contas.
 
-**Fora de escopo (não implementado):** integração real com a rede PIX do Banco Central (o depósito e o saque são simulados/mockados), KYC com upload e análise de documento (existe apenas uma flag booleana `is_verified` e um endpoint de atalho para ambiente de desenvolvimento), motor de antifraude, cobrança de taxas de serviço (`FEE`), webhooks assíncronos (a confirmação de depósito é síncrona), notificações ao usuário.
+**Fora de escopo (não implementado):** integração real com a rede PIX do Banco Central (o depósito e o saque são simulados/mockados), KYC com upload e análise de documento (existe apenas uma flag booleana `is_verified` e um endpoint de atalho para ambiente de desenvolvimento), cobrança de taxas de serviço (`FEE`), webhooks assíncronos (a confirmação de depósito é síncrona), notificações ao usuário.
 
 ---
 
@@ -39,6 +39,9 @@ O **PayCore** é um sistema de carteira digital (fintech) que oferece cadastro d
 | **Partidas dobradas (double-entry)** | Princípio contábil pelo qual toda transação gera exatamente um débito e um crédito de mesmo valor. O saldo de uma conta é sempre `Σ créditos - Σ débitos`, nunca um valor armazenado |
 | **Idempotência** | Propriedade pela qual repetir a mesma requisição financeira (mesma `Idempotency-Key`) nunca duplica o efeito - a mesma transação é retornada |
 | **Conciliação (reconciliation)** | Processo de cruzar os lançamentos do ledger com as transações para provar que os livros contábeis são consistentes: soma-zero global e balanço por transação |
+| **Antifraude (fraud screening)** | Triagem aplicada a transações de saída (saque, transferência) **antes** de o dinheiro se mover, por um motor de regras que devolve uma decisão: `APPROVED`, `REVIEW` (retida para análise manual) ou `BLOCKED` (recusada) |
+| **`fraud_status`** | Coluna que registra a decisão da antifraude para uma transação (`APPROVED`/`REVIEW`/`BLOCKED`); ortogonal ao `status` do ciclo de vida (uma transação pode ser `PENDING`/`REVIEW`, `FAILED`/`BLOCKED` ou `COMPLETED`/`APPROVED`) |
+| **Fila de revisão** | Conjunto de transações retidas (`status=PENDING`, `fraud_status=REVIEW`) aguardando um operador aprovar (liberar e liquidar) ou rejeitar |
 | **KYC (Know Your Customer)** | Processo de verificação de identidade do usuário. No PayCore é representado pela flag `is_verified` em `User`, ativada via endpoint de atalho de desenvolvimento (`/dev/verify-me`) |
 | **PIX** | Sistema de pagamentos instantâneos brasileiro. No PayCore, depósito e saque via PIX são **simulados** (não há integração real com o Banco Central) |
 | **Centavo (cents)** | Unidade monetária interna do sistema: todo valor é armazenado e trafegado como número inteiro de centavos, nunca como ponto flutuante |
@@ -60,7 +63,7 @@ Não há autenticação de usuário final nos endpoints `GET /health` e `POST /p
 
 ## 4. Regras de negócio
 
-As regras abaixo foram extraídas do comportamento real implementado em `app/services/ledger.py`, `app/services/payment.py`, `app/services/auth.py`, `app/services/reconciliation.py` e `app/api/`.
+As regras abaixo foram extraídas do comportamento real implementado em `app/services/ledger.py`, `app/services/payment.py`, `app/services/auth.py`, `app/services/reconciliation.py`, `app/services/fraud.py` e `app/api/`.
 
 ### RN01 - Unicidade de e-mail, CPF e número de conta
 Cada `User` é identificado de forma única por `email` e por `cpf` (constraints `UNIQUE` no banco). Cada `Account` possui um `account_number` único de 10 dígitos, gerado por `generate_account_number()` com até 5 tentativas de checagem de colisão antes de persistir.
@@ -129,6 +132,28 @@ O endpoint `GET /admin/reconciliation` não usa autenticação JWT de usuário f
 ### RN17 - Autenticação via JWT com expiração
 O login (`POST /auth/login`) retorna um token JWT (`HS256`) cujo `sub` é o UUID do usuário, com expiração configurável (`ACCESS_TOKEN_EXPIRE_MINUTES`, padrão 24h). Um token com `sub` malformado (não é um UUID válido) é rejeitado como credencial inválida (`401`), não como erro interno.
 > Código: `create_access_token`, `decode_access_token` (`app/core/security.py`); `get_current_user` (`app/api/deps.py`, linhas 20-44).
+
+### RN18 - Triagem antifraude precede a liquidação em fluxos de saída
+Toda transferência (`P2P`) e todo saque (`PIX_OUT`) passam por um motor de regras de antifraude **antes** de qualquer lançamento no ledger (antes do `post_double_entry`). O motor executa cada regra e adota a decisão **mais severa** entre elas, seguindo a ordem `APPROVED < REVIEW < BLOCKED`. Depósitos (`PIX_IN`) não são triados (dinheiro entrando não caracteriza o risco desse motor). A decisão é persistida em `transactions.fraud_status`.
+> Código: `FraudService.evaluate` (`app/services/fraud.py`); `PaymentService._screen` (`app/services/payment.py`, integrado em `create_transfer` e `create_withdrawal`).
+
+### RN19 - As três regras de triagem: valor, velocidade e limite diário
+O motor aplica três regras configuráveis (thresholds em `app/core/config.py`):
+- **Valor (`AmountThresholdRule`)**: valor `>= FRAUD_BLOCK_AMOUNT_CENTS` → `BLOCKED`; valor `>= FRAUD_REVIEW_AMOUNT_CENTS` (e abaixo do bloqueio) → `REVIEW`.
+- **Velocidade (`VelocityRule`)**: mais de `FRAUD_VELOCITY_MAX_DEBITS` débitos da conta na janela `FRAUD_VELOCITY_WINDOW_SECONDS` → `REVIEW`.
+- **Limite diário (`DailyDebitLimitRule`)**: se os débitos das últimas 24h somados ao valor atual excedem `FRAUD_DAILY_DEBIT_LIMIT_CENTS` → `BLOCKED`.
+As regras de velocidade e limite diário consultam `ledger_entries` (débitos reais, colunas indexadas `account_id`/`created_at`), refletindo dinheiro que efetivamente saiu.
+> Código: `AmountThresholdRule`, `VelocityRule`, `DailyDebitLimitRule` (`app/services/fraud.py`).
+
+### RN20 - Desfecho da triagem: bloqueio recusa, revisão retém, aprovação segue
+- **`BLOCKED`**: a transação é marcada `FAILED`, nenhum dinheiro se move, e a API responde `403 Forbidden`.
+- **`REVIEW`**: a transação fica **retida** (`status=PENDING`, `fraud_status=REVIEW`), sem mover dinheiro, e é devolvida ao cliente (`201` com `status=PENDING`). Fica na fila de revisão até um operador decidir.
+- **`APPROVED`**: o fluxo segue normalmente para a liquidação (`post_double_entry`).
+> Código: `PaymentService._screen` (`app/services/payment.py`).
+
+### RN21 - Resolução manual de transação retida re-valida saldo na liberação
+Um operador pode **aprovar** ou **rejeitar** uma transação retida via `/admin/fraud/reviews/{id}/approve|reject` (protegido por `X-Admin-Key`). Aprovar executa a liquidação **naquele momento**, com nova verificação de saldo (o saldo pode ter mudado enquanto a transação aguardava): se insuficiente, a liberação falha (`422`) e a transação vira `FAILED`. Rejeitar marca a transação como `FAILED`/`BLOCKED` sem mover dinheiro. Ambas as ações travam a linha da transação (`SELECT ... FOR UPDATE`) e exigem que ela esteja de fato retida (`PENDING`+`REVIEW`), respondendo `409 Conflict` caso contrário.
+> Código: `PaymentService.approve_review`, `reject_review`, `_lock_pending_review` (`app/services/payment.py`); rotas em `app/api/routes/admin.py`.
 
 ---
 
@@ -247,6 +272,20 @@ Formato: `Como <ator>, quero <ação>, para <benefício>`, com critérios de ace
 
 **Critérios de aceite:**
 - O endpoint `GET /health` retorna status `200` com `{"status": "ok"}`, sem exigir autenticação.
+
+### US11 - Barrar e revisar transações suspeitas (antifraude)
+
+**Como** operador de risco/fraude,
+**quero** que transações de saída suspeitas sejam automaticamente bloqueadas ou retidas para análise, e conseguir liberar ou rejeitar as retidas,
+**para** proteger o sistema e os usuários contra movimentações fraudulentas sem travar as operações legítimas.
+
+**Critérios de aceite:**
+- Uma transferência ou saque com valor acima do teto de bloqueio (ou que estoure o limite diário) é **recusada** (`403`), sem mover dinheiro, e fica registrada como `FAILED`/`BLOCKED`.
+- Uma transferência ou saque em faixa de revisão é **retida** (`201`, `status=PENDING`, `fraud_status=REVIEW`), sem mover dinheiro, e aparece na fila `/admin/fraud/reviews`.
+- Autenticado com a chave de administração, posso **aprovar** uma transação retida — ela é liquidada naquele momento (com nova verificação de saldo) — ou **rejeitá-la** — marcada como `FAILED`.
+- Aprovar uma transação retida cujo saldo se tornou insuficiente responde `422` e marca a transação como `FAILED`.
+- Os endpoints de revisão exigem a chave de administração; sem ela, respondem `401 Unauthorized`.
+- Uma transação de valor normal, dentro dos limites, é aprovada automaticamente e liquidada sem intervenção.
 
 ---
 
@@ -368,6 +407,47 @@ Funcionalidade: Transferência P2P entre contas
 ```
 
 ```gherkin
+Funcionalidade: Triagem antifraude de transações de saída
+  Como operador de risco/fraude
+  Quero que transações suspeitas sejam bloqueadas ou retidas antes de liquidar
+  Para proteger o sistema sem travar operações legítimas
+
+  Cenário: Bloquear uma transferência de valor muito alto
+    Dado um usuário verificado
+    Quando ele solicitar uma transferência de valor acima do teto de bloqueio
+    Então a API deve responder com status 403
+    E nenhum dinheiro deve se mover
+
+  Cenário: Reter uma transferência em faixa de revisão
+    Dado um usuário verificado com saldo suficiente
+    Quando ele solicitar uma transferência em faixa de revisão
+    Então a resposta deve ter status 201 com status "PENDING" e fraud_status "REVIEW"
+    E o saldo da conta não deve mudar enquanto a transação estiver retida
+    E a transação deve aparecer na fila de revisão do admin
+
+  Cenário: Aprovar uma transação retida liquida o movimento
+    Dado uma transferência retida na fila de revisão
+    Quando um operador aprovar essa transação com a chave de administração
+    Então a transação deve passar para "COMPLETED"
+    E o dinheiro deve ser efetivamente movido entre as contas
+
+  Cenário: Rejeitar uma transação retida não move dinheiro
+    Dado uma transferência retida na fila de revisão
+    Quando um operador rejeitar essa transação com a chave de administração
+    Então a transação deve passar para "FAILED"
+    E o saldo das contas não deve mudar
+
+  Cenário: Bloquear acesso à fila de revisão sem a chave de administração
+    Quando eu consultar a fila de revisão sem informar o header X-Admin-Key
+    Então a API deve responder com status 401
+
+  Cenário: Uma transação normal é aprovada automaticamente
+    Dado um usuário verificado com saldo suficiente
+    Quando ele solicitar uma transferência de valor dentro dos limites
+    Então a transferência deve ser concluída (COMPLETED) sem intervenção manual
+```
+
+```gherkin
 Funcionalidade: Conciliação contábil (ledger)
   Como operador de operações financeiras
   Quero auditar a integridade contábil do sistema
@@ -423,6 +503,7 @@ Funcionalidade: Observabilidade e saúde do sistema
 | `X-Admin-Key` (header) | Obrigatório e deve corresponder exatamente (comparação em tempo constante) a `ADMIN_API_KEY` para acessar `/admin/*` | `require_admin` (`app/api/deps.py`, linhas 98-109) |
 | `page`, `page_size` (extrato) | Inteiros positivos; `page_size` limitado a no máximo 100 | `app/api/routes/accounts.py::get_my_statement` (`Query(default=1, ge=1)`, `Query(default=20, ge=1, le=100)`) |
 | `account_number` (conta) | Numérico, 10 dígitos, gerado pelo sistema; unicidade garantida com nova tentativa em caso de colisão | `generate_account_number` (`app/services/auth.py`, linhas 32-33) |
+| Thresholds de antifraude (`FRAUD_*`) | Configuráveis por ambiente (valores em centavos): faixa de revisão, teto de bloqueio, janela e máximo de velocidade, limite diário | `Settings` (`app/core/config.py`); `.env.example` |
 
 ---
 
@@ -436,10 +517,11 @@ Funcionalidade: Observabilidade e saúde do sistema
 | **Correção monetária** | Dinheiro nunca é representado como ponto flutuante; sempre inteiro em centavos, com valor positivo garantido em dois níveis (aplicação e banco) | RN12 |
 | **Auditabilidade** | Toda tentativa de movimentação financeira (mesmo recusada) fica registrada com status rastreável (`PENDING`/`COMPLETED`/`FAILED`) | RN07; extrato (`GET /accounts/me/statement`) |
 | **Verificabilidade contínua** | O sistema oferece um mecanismo ativo (conciliação) para provar sua própria integridade contábil, não apenas confiar na lógica de aplicação | RN14; `tests/test_reconciliation.py` |
-| **Extensibilidade sem migração destrutiva** | Novos tipos de transação são incorporados sem reescrever dados existentes | RN16; migração `2bfdbfff13c8` |
+| **Prevenção de fraude** | Transações de saída suspeitas são bloqueadas ou retidas antes de liquidar, com decisão persistida e fila de revisão manual | RN18-RN21; `tests/test_fraud.py` |
+| **Extensibilidade sem migração destrutiva** | Novos tipos de transação e colunas de decisão são incorporados sem reescrever dados existentes | RN16; migrações `2bfdbfff13c8`, `a82ae7b338f7` |
 | **Segurança** | Senhas com hash `bcrypt`; tokens JWT com expiração; comparação de chave administrativa em tempo constante | RN15, RN17; `app/core/security.py`; detalhes em [`docs/SEGURANCA.md`](SEGURANCA.md) |
 | **Qualidade de código** | Lint (Ruff) obrigatório, sem exceções pendentes | `pyproject.toml` (`[tool.ruff]`); execução `ruff check` sem erros |
-| **Cobertura de testes** | Suíte cobre lógica de domínio (services) e a stack HTTP completa (rotas, validação, autenticação) | 33 testes, ~89% de cobertura (`pytest --cov=app`) |
+| **Cobertura de testes** | Suíte cobre lógica de domínio (services) e a stack HTTP completa (rotas, validação, autenticação) | 48 testes, ~89% de cobertura (`pytest --cov=app`) |
 | **Portabilidade de execução** | Deve rodar via Docker Compose (Postgres + API) sem configuração manual adicional | `docker-compose.yml`, `Dockerfile` |
 | **Segurança de segredos** | Credenciais e chaves nunca versionadas; apenas exemplo vazio | `.gitignore`, `.env.example` |
 
@@ -465,6 +547,9 @@ Funcionalidade: Observabilidade e saúde do sistema
 | RN15 (guarda de admin) | `require_admin` / `AdminGuard` (`app/api/deps.py`) | `tests/test_api.py::test_reconciliation_requires_admin_key` |
 | RN16 (enum extensível) | `TransactionType(StrEnum)`; migração `2bfdbfff13c8` | Migração validada manualmente do zero (banco descartável); coberta indiretamente por `tests/test_withdrawal.py` |
 | RN17, US02 (autenticação JWT) | `create_access_token`, `decode_access_token`, `get_current_user` | `tests/test_api.py::test_login_with_wrong_password_returns_401`, `test_protected_route_without_token_returns_401` |
+| RN18, RN19 (motor e regras de fraude) | `FraudService.evaluate`; `AmountThresholdRule`, `VelocityRule`, `DailyDebitLimitRule` (`app/services/fraud.py`) | `tests/test_fraud.py::test_amount_rule_*`, `test_engine_takes_the_most_severe_outcome`, `test_velocity_rule_reviews_after_enough_debits`, `test_daily_limit_counts_prior_debits` |
+| RN20, US11 (desfecho block/review/approve) | `PaymentService._screen` | `tests/test_fraud.py::test_blocked_transfer_moves_no_money_and_is_failed`, `test_reviewed_transfer_is_held_without_moving_money`; `tests/test_api.py::test_large_transfer_is_blocked_by_fraud`, `test_medium_transfer_is_held_for_review_then_approved` |
+| RN21 (resolução manual + re-validação de saldo) | `PaymentService.approve_review`, `reject_review` | `tests/test_fraud.py::test_approving_a_held_transfer_settles_it`, `test_rejecting_a_held_transfer_fails_it`, `test_approving_held_withdrawal_settles_against_settlement` |
 | US01 (cadastro) | `AuthService.register` | `tests/test_api.py` (fluxo `_register_verified`, usado em todos os testes de integração) |
 | US04 (depósito) | `PaymentService.create_deposit`, `confirm_deposit` | `tests/test_deposit.py::test_deposit_credits_account_only_after_confirmation`; `tests/test_api.py::test_full_deposit_and_transfer_flow` |
 | US05 (saque) | `PaymentService.create_withdrawal` | `tests/test_withdrawal.py::test_withdrawal_debits_the_account`; `tests/test_api.py::test_deposit_then_withdraw_flow` |
