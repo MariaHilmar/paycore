@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.errors import register_exception_handlers
 from app.api.routes import accounts, admin, auth, pix, transfers
 from app.core.config import get_settings
 
@@ -10,6 +11,8 @@ app = FastAPI(
     version=settings.APP_VERSION,
     description="Minimal fintech ledger: double-entry accounting, idempotent PIX and P2P transfers.",
 )
+
+register_exception_handlers(app)
 
 app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(accounts.router, prefix=settings.API_V1_STR)
