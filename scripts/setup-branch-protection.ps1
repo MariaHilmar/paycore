@@ -3,13 +3,13 @@
 # Uso:
 #   .\scripts\setup-branch-protection.ps1 -AllRepos
 #   .\scripts\setup-branch-protection.ps1 -Repo paycore
-#   .\scripts\setup-branch-protection.ps1 -AllRepos -RequiredReviewCount 0
+#   .\scripts\setup-branch-protection.ps1 -AllRepos -RequiredReviewCount 1
 #
 # RequiredReviewCount = 0 (padrao):
 #   - PR obrigatorio + CI verde
 #   - Voce PODE clicar em Approve no proprio PR (auto-revisao)
 # RequiredReviewCount = 1:
-#   - GitHub bloqueia auto-aprovacao; o botao Approve nao vale para o autor do PR
+#   - Exige aprovacao de outra pessoa; o autor do PR nao pode aprovar
 #
 # Requisitos: gh auth login com permissao admin nos repositorios.
 
