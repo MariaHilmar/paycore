@@ -1,16 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from app.api.deps import AdminGuard, SessionDep
 from app.schemas.fraud import FraudReviewItem, FraudReviewList, FraudReviewResolution
 from app.schemas.reconciliation import ReconciliationReportOut, TransactionDiscrepancyOut
-from app.services.payment import (
-    InsufficientBalanceError,
-    PaymentService,
-    ReviewNotPendingError,
-    TransactionNotFoundError,
-)
+from app.services.payment import PaymentService
 from app.services.reconciliation import ReconciliationService
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[AdminGuard])
@@ -75,22 +70,7 @@ async def approve_fraud_review(
     transaction_id: uuid.UUID, session: SessionDep
 ) -> FraudReviewResolution:
     """Release a held transaction, settling it now (funds re-checked at this moment)."""
-    service = PaymentService(session)
-    try:
-        transaction = await service.approve_review(transaction_id)
-    except TransactionNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="transaction not found"
-        ) from exc
-    except ReviewNotPendingError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="transaction is not awaiting review"
-        ) from exc
-    except InsufficientBalanceError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="insufficient balance to settle the held transaction",
-        ) from exc
+    transaction = await PaymentService(session).approve_review(transaction_id)
     return _resolution(transaction)
 
 
@@ -99,15 +79,5 @@ async def reject_fraud_review(
     transaction_id: uuid.UUID, session: SessionDep
 ) -> FraudReviewResolution:
     """Reject a held transaction: no money moves, recorded as FAILED."""
-    service = PaymentService(session)
-    try:
-        transaction = await service.reject_review(transaction_id)
-    except TransactionNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="transaction not found"
-        ) from exc
-    except ReviewNotPendingError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="transaction is not awaiting review"
-        ) from exc
+    transaction = await PaymentService(session).reject_review(transaction_id)
     return _resolution(transaction)

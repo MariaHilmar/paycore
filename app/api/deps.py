@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.db.models import Account, User
 from app.db.session import get_db
+from app.services.payment import PaymentService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -72,7 +73,7 @@ async def get_verified_account(user: CurrentUser, account: CurrentAccount) -> Ac
     if not user.is_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="account must be verified before moving money; call /dev/verify-me first",
+            detail="account must pass KYC verification before moving money",
         )
     return account
 
@@ -110,3 +111,11 @@ async def require_admin(
 
 
 AdminGuard = Depends(require_admin)
+
+
+def get_payment_service(session: SessionDep) -> PaymentService:
+    """Provides a request-scoped PaymentService so routes don't wire it by hand."""
+    return PaymentService(session)
+
+
+PaymentServiceDep = Annotated[PaymentService, Depends(get_payment_service)]

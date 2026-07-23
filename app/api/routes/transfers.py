@@ -4,17 +4,15 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentAccount, IdempotencyKey, SessionDep, VerifiedAccount
+from app.api.deps import (
+    CurrentAccount,
+    IdempotencyKey,
+    PaymentServiceDep,
+    SessionDep,
+    VerifiedAccount,
+)
 from app.db.models import Account, TransactionType
 from app.schemas.transaction import TransferCreate, TransferOut
-from app.services.payment import (
-    AccountNotFoundError,
-    FraudBlockedError,
-    InsufficientBalanceError,
-    PaymentService,
-    SelfTransferError,
-    TransactionNotFoundError,
-)
 
 router = APIRouter(prefix="/transfers", tags=["transfers"])
 
@@ -28,33 +26,16 @@ async def _account_number(session: AsyncSession, account_id: uuid.UUID) -> str:
 async def create_transfer(
     data: TransferCreate,
     account: VerifiedAccount,
+    service: PaymentServiceDep,
     session: SessionDep,
     idempotency_key: IdempotencyKey,
 ) -> TransferOut:
-    service = PaymentService(session)
-    try:
-        transaction = await service.create_transfer(
-            from_account_id=account.id,
-            to_account_number=data.to_account_number,
-            amount_cents=data.amount_cents,
-            idempotency_key=idempotency_key,
-        )
-    except SelfTransferError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="cannot transfer to your own account"
-        ) from exc
-    except AccountNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="destination account not found"
-        ) from exc
-    except FraudBlockedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="transaction blocked by fraud screening"
-        ) from exc
-    except InsufficientBalanceError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="insufficient balance"
-        ) from exc
+    transaction = await service.create_transfer(
+        from_account_id=account.id,
+        to_account_number=data.to_account_number,
+        amount_cents=data.amount_cents,
+        idempotency_key=idempotency_key,
+    )
 
     to_account_id = uuid.UUID(transaction.extra_data["to_account_id"])
     return TransferOut(
@@ -72,15 +53,10 @@ async def create_transfer(
 async def get_transfer(
     transaction_id: uuid.UUID,
     account: CurrentAccount,
+    service: PaymentServiceDep,
     session: SessionDep,
 ) -> TransferOut:
-    service = PaymentService(session)
-    try:
-        transaction = await service.get_transaction(transaction_id)
-    except TransactionNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="transfer not found"
-        ) from exc
+    transaction = await service.get_transaction(transaction_id)
 
     if transaction.type != TransactionType.P2P:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="transfer not found")
