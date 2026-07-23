@@ -232,13 +232,17 @@ Opções: `-Quick` (sem cobertura), `-LintOnly`, `-SkipLint`.
 
 ### Política de revisão (CI/CD)
 
-Push direto em `main` está **bloqueado**. Todo merge passa por **pull request** com:
+Push direto em `main` está **bloqueado**. Todo merge passa por **pull request** com revisão humana:
 
-1. CI verde (Lint + Test)
-2. Pelo menos **1 aprovação** de revisão
-3. Conversas do PR resolvidas
+1. Abrir PR com o diff das mudanças
+2. Aguardar CI verde (Lint + Test + Sonar)
+3. **Revisar o código** na aba *Files changed* (mesmo quando gerado por IA)
+4. Marcar o checklist em [`.github/pull_request_template.md`](.github/pull_request_template.md)
+5. Clicar em **Approve** e fazer o merge
 
-Configurar em outros repositórios: `.\scripts\setup-branch-protection.ps1` (requer `gh auth login` com permissão admin).
+A aprovação é sua (repositório solo), mas o passo de **ler e validar o diff** é obrigatório no processo - não é opcional.
+
+Configurar em outros repositórios: `.\scripts\setup-branch-protection.ps1 -Repo <nome>` (requer `gh auth login` com permissão admin).
 
 São **48 testes** (cobertura ~89%) em dois níveis:
 
@@ -314,8 +318,20 @@ Este projeto foi desenvolvido com **ferramentas de IA generativa** sob a metodol
 
 ### Code review
 
-- **Revisão humana** em pull requests (template em [`.github/pull_request_template.md`](.github/pull_request_template.md))
+Fluxo adotado neste repositório:
+
+| Etapa | Quem | O quê |
+|-------|------|-------|
+| Implementação | IA (Cursor) | Gera código a partir do pedido e dos docs SDD |
+| Revisão | **Você** | Lê o diff, valida regras de negócio e invariantes financeiros |
+| Aprovação | **Você** | Clica em *Approve* no PR após revisar |
+| Merge | **Você** | Só depois do CI verde + checklist marcado |
+
+Ferramentas de apoio à revisão:
+
+- Template de PR com checklist em [`.github/pull_request_template.md`](.github/pull_request_template.md)
 - **Cursor Bugbot** em PRs com regras financeiras em [`.cursor/BUGBOT.md`](.cursor/BUGBOT.md) (ledger, idempotência, concorrência, KYC)
+- **SonarCloud** - quality gate no PR
 - Ative o Bugbot no [dashboard do Cursor](https://cursor.com/dashboard) para o repositório `MariaHilmar/paycore`
 
 ---
