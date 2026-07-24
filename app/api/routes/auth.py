@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import CurrentUser, DebugOnly, SessionDep
 from app.core.security import create_access_token
 from app.schemas.auth import Token, UserLogin, UserOut, UserRegister
 from app.services.auth import AuthService
@@ -20,8 +20,11 @@ async def login(data: UserLogin, session: SessionDep) -> Token:
     return Token(access_token=create_access_token(subject=str(user.id)))
 
 
-@router.post("/dev/verify-me", response_model=UserOut)
+@router.post("/dev/verify-me", response_model=UserOut, dependencies=[DebugOnly])
 async def verify_me(user: CurrentUser, session: SessionDep) -> UserOut:
-    """Dev-only shortcut: marks the current user as KYC-verified without a document upload."""
+    """Dev-only shortcut: marks the current user as KYC-verified without a document upload.
+
+    Gated behind DEBUG: unreachable (404) in a production deployment.
+    """
     verified_user = await AuthService(session).verify_user(user.id)
     return UserOut.model_validate(verified_user)

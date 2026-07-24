@@ -5,6 +5,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.deps import require_debug
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -30,6 +31,9 @@ async def client():
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    # /dev/verify-me is gated behind DEBUG; enable it for the suite regardless of
+    # the ambient environment (CI runs without a .env, so DEBUG defaults to False).
+    app.dependency_overrides[require_debug] = lambda: None
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -65,6 +69,29 @@ async def test_health(client: AsyncClient):
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_verify_me_is_gated_behind_debug(client: AsyncClient, monkeypatch):
+    """The dev KYC shortcut must be unreachable (404) when DEBUG is off."""
+    from types import SimpleNamespace
+
+    from app.api import deps
+
+    # Register + login while the endpoint is still reachable.
+    email, cpf, password = random_email(), random_cpf(), "a-strong-password"
+    await client.post(
+        "/api/v1/auth/register", json={"email": email, "cpf": cpf, "password": password}
+    )
+    resp = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    # Drop the suite-wide bypass and turn DEBUG off: the real gate now applies.
+    app.dependency_overrides.pop(require_debug, None)
+    monkeypatch.setattr(deps, "get_settings", lambda: SimpleNamespace(DEBUG=False))
+
+    resp = await client.post("/api/v1/dev/verify-me", headers=headers)
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -96,6 +96,19 @@ async def get_idempotency_key(
 IdempotencyKey = Annotated[str, Depends(get_idempotency_key)]
 
 
+async def require_debug() -> None:
+    """Guards dev-only endpoints so they are unreachable outside development.
+
+    Returns 404 (not 403) so a production deployment never reveals that the
+    endpoint exists. Enabled only when DEBUG is true.
+    """
+    if not get_settings().DEBUG:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
+DebugOnly = Depends(require_debug)
+
+
 async def require_admin(
     admin_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
 ) -> None:
