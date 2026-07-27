@@ -59,7 +59,7 @@ Este documento existe para **tornar explícitas** as escolhas de segurança - in
 | Endpoint / área | Autenticação | Risco principal |
 |---|---|---|
 | `POST /auth/register`, `POST /auth/login` | Pública | Enumeração de contas, brute force de senha |
-| `POST /dev/verify-me` | JWT usuário | Bypass de KYC em deploy público |
+| `POST /dev/verify-me` | JWT usuário + `DEBUG` | Bypass de KYC — mitigado: 404 quando `DEBUG=false` |
 | `POST /pix/deposit`, `/withdraw`, `/transfers` | JWT + KYC + Idempotency-Key | Uso indevido por conta verificada |
 | `POST /pix/deposit/{txid}/pay` | **Nenhuma** (webhook simulado) | Crédito fraudulento se `txid` for conhecido |
 | `GET /transfers/{id}` | JWT + checagem origem/destino | IDOR (mitigado) |
@@ -144,14 +144,14 @@ Queries de negócio usam SQLAlchemy 2.0 (`select`, `where`) sem concatenação d
 
 As ausências abaixo são **decisões de escopo** para um portfólio focado em ledger e transações ACID. Cada item inclui risco, justificativa e mitigação planejada para produção.
 
-### LC01 - `/dev/verify-me` sempre disponível
+### LC01 - `/dev/verify-me` como atalho de KYC ~~(sempre disponível)~~ **(gateado por `DEBUG`)**
 
 | | |
 |---|---|
 | **Risco** | Qualquer usuário autenticado pode auto-verificar KYC e movimentar dinheiro |
 | **Justificativa** | Atalho de demonstração para exercitar o fluxo completo sem pipeline de upload/análise de documentos (MinIO, SLA de revisão, compliance) |
-| **Mitigação em produção** | Remover rota ou proteger com `DEBUG=true` / feature flag; substituir por máquina de estados KYC real |
-| **Código** | `verify_me` (`app/api/routes/auth.py`, linhas 44-49); `AuthService.verify_user` (`app/services/auth.py`, linhas 91-97) |
+| **Mitigação** | **Entregue:** a rota é gateada pela dependência `require_debug`, que retorna **404** quando `DEBUG=false` — inacessível em produção, sem revelar sua existência. Limitação residual: continua sendo um atalho, não um KYC real (roadmap item 8: máquina de estados com upload) |
+| **Código** | `require_debug` (`app/api/deps.py`); `verify_me` com `dependencies=[DebugOnly]` (`app/api/routes/auth.py`); teste `tests/test_api.py::test_verify_me_is_gated_behind_debug` |
 
 ### LC02 - Webhook PIX (`/pay`) sem autenticação
 
@@ -189,14 +189,14 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | **Mitigação em produção** | Checar `account.status == ACTIVE` em `get_verified_account` ou dependência dedicada |
 | **Código** | `AccountStatus.BLOCKED` (`app/db/models.py`, linhas 21-23); ausência de checagem em `get_verified_account` (`app/api/deps.py`, linhas 66-77) |
 
-### LC06 - Segredos com valores default em desenvolvimento
+### LC06 - Segredos com valores default em desenvolvimento ~~(deploy acidental)~~ **(startup bloqueado em produção)**
 
 | | |
 |---|---|
 | **Risco** | Deploy acidental com `SECRET_KEY` ou `ADMIN_API_KEY` previsíveis |
 | **Justificativa** | Facilita `docker compose up` local sem configuração extra |
-| **Mitigação em produção** | Falhar no startup se segredos forem os defaults; usar secrets manager (Railway, Vault) |
-| **Código** | `Settings.SECRET_KEY`, `ADMIN_API_KEY` (`app/core/config.py`, linhas 18 e 23); `docker-compose.yml` (linhas 22-23) |
+| **Mitigação** | **Entregue:** o validador `Settings._reject_default_secrets_in_production` recusa o boot (levanta erro) quando `DEBUG=false` e qualquer segredo ainda é o placeholder — falha rápida em vez de rodar exposto. Limitação residual: uso de secrets manager (Railway, Vault) fica a cargo do deploy |
+| **Código** | `_reject_default_secrets_in_production`, `DEFAULT_SECRET_KEY`, `DEFAULT_ADMIN_API_KEY` (`app/core/config.py`); testes em `tests/test_config.py` |
 
 ### LC07 - JWT sem refresh token nem revogação
 
@@ -241,11 +241,11 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | ID | Ameaça | Probabilidade (MVP público) | Impacto | Status | Mitigação atual / planejada |
 |---|---|---|---|---|---|
 | R01 | Brute force em login | Média | Médio | Aberto | SC04 (mensagem genérica); roadmap: rate limit |
-| R02 | Bypass KYC via `/dev/verify-me` | Alta | Alto | Aceito (MVP) | LC01 - documentado; remover em produção |
+| R02 | Bypass KYC via `/dev/verify-me` | Alta | Alto | Mitigado | LC01 - gateado por `DEBUG` (`require_debug`), retorna 404 em produção |
 | R03 | Crédito fraudulento via `/pay` | Baixa-Média | Alto | Aceito (MVP) | LC02 - UUID dificulta adivinhação; roadmap: HMAC |
 | R04 | Token JWT roubado | Baixa | Médio | Parcial | SC02 (expiração); LC07 (sem revogação) |
 | R05 | IDOR em transferências | Baixa | Médio | Mitigado | SC07 |
-| R06 | Vazamento de chave admin | Baixa | Alto | Parcial | SC08, SC09; LC06 (defaults) |
+| R06 | Vazamento de chave admin | Baixa | Alto | Parcial | SC08, SC09; LC06 (startup bloqueia defaults em produção) |
 | R07 | SQL injection | Baixa | Alto | Mitigado | SC11 |
 | R08 | Enumeração no cadastro | Média | Baixo | Aceito (MVP) | LC04 |
 | R09 | Overdraft por concorrência | Média | Alto | Mitigado | Ledger + `SELECT FOR UPDATE` (RN05, RN06) |
@@ -260,9 +260,9 @@ Ordem sugerida de evolução (cada item = commit/PR visível no GitHub):
 
 | Ordem | Entrega | Esforço estimado |
 |---|---|---|
-| 1 | Condicionar `/dev/verify-me` a `DEBUG=true` | Baixo |
+| 1 | ~~Condicionar `/dev/verify-me` a `DEBUG=true`~~ **(entregue - `require_debug`, retorna 404 em produção)** | Baixo |
 | 2 | `X-Webhook-Secret` em `/pix/deposit/{txid}/pay` | Baixo |
-| 3 | Falhar no startup com segredos default em produção | Baixo |
+| 3 | ~~Falhar no startup com segredos default em produção~~ **(entregue - `_reject_default_secrets_in_production`)** | Baixo |
 | 4 | Checar `AccountStatus.BLOCKED` nas dependências | Baixo |
 | 5 | Rate limiting (`slowapi`) em login e register | Médio |
 | 6 | ~~`FraudService` com regras básicas~~ **(entregue - RN18-RN21)** | Médio |
