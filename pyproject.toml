@@ -25,6 +25,7 @@ dependencies = [
     "bcrypt>=4.0.0",
     "python-multipart>=0.0.6",
     "httpx>=0.25.2",
+    "slowapi>=0.1.9",
 ]
 
 [project.optional-dependencies]

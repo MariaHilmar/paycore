@@ -162,13 +162,14 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | **Mitigação** | **Entregue:** header `X-Webhook-Secret` comparado em tempo constante. Limitação residual: HMAC do PSP e fila assíncrona ficam no roadmap |
 | **Código** | `require_webhook_secret` (`app/api/deps.py`); `pay_deposit` com `dependencies=[WebhookGuard]` (`app/api/routes/pix.py`); teste `tests/test_api.py::test_pay_requires_webhook_secret` |
 
-### LC03 - Sem rate limiting
+### LC03 - Sem rate limiting ~~(adiado)~~ **(slowapi em auth e webhook)**
 
 | | |
 |---|---|
 | **Risco** | Brute force em `/auth/login`, spam em `/auth/register`, abuso de `/pay` |
-| **Justificativa** | Escopo de portfólio; infraestrutura de throttling (Redis/slowapi) adiada |
-| **Mitigação em produção** | Rate limit por IP/rota; lockout temporário após N falhas de login |
+| **Justificativa** | Escopo de portfólio; throttling distribuído (Redis) adiado |
+| **Mitigação** | **Entregue:** `slowapi` com limites configuráveis por IP (`RATE_LIMIT_AUTH`, `RATE_LIMIT_WEBHOOK`). Limitação residual: storage in-memory (não compartilhado entre réplicas) |
+| **Código** | `app/core/rate_limit.py`; `auth.py` (login/register); `pix.py` (`/pay`); testes `tests/test_api.py::test_login_rate_limited`, `test_webhook_pay_rate_limited` |
 
 ### LC04 - Enumeração de e-mail/CPF no cadastro
 
@@ -206,13 +207,13 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | **Justificativa** | Simplicidade do MVP; refresh/revogação adiciona tabela de sessões e complexidade |
 | **Mitigação em produção** | Refresh token rotativo, blacklist de JWT, expiração curta (15-30 min) |
 
-### LC08 - Antifraude sem trava de concorrência no limite diário, sem device fingerprint nem log de eventos
+### LC08 - Antifraude ~~sem trava de concorrência no limite diário~~ **(lock por conta)**, sem device fingerprint nem log de eventos
 
 | | |
 |---|---|
-| **Risco** | O motor antifraude (`FraudService`) já barra/retém saídas por valor, velocidade e limite diário **antes** da liquidação (RN18-RN21). Porém a regra de limite diário lê o total debitado sem lock: duas saídas concorrentes podem ser avaliadas antes de qualquer débito ser registrado e, juntas, ultrapassar o limite. Também não há device fingerprint nem trilha de eventos de segurança. |
-| **Justificativa** | A triagem cobre o cenário principal do MVP; serialização estrita do limite diário exigiria lock por conta/janela e o scoring comportamental está fora do escopo educacional |
-| **Mitigação em produção** | Lock pessimista ou contador transacional por conta na janela de 24h; device fingerprint; log de eventos de segurança; scoring de risco |
+| **Risco** | O motor antifraude (`FraudService`) já barra/retém saídas por valor, velocidade e limite diário **antes** da liquidação (RN18-RN21). ~~Porém a regra de limite diário lê o total debitado sem lock~~ **A triagem agora trava a conta pagadora (`SELECT ... FOR UPDATE`) antes de avaliar as regras**, serializando saídas concorrentes. Também não há device fingerprint nem trilha de eventos de segurança. |
+| **Justificativa** | A triagem cobre o cenário principal do MVP; scoring comportamental e trilha de eventos estão fora do escopo educacional |
+| **Mitigação** | **Entregue (limite diário):** lock pessimista em `FraudService.evaluate`. Limitação residual: device fingerprint; log de eventos; scoring de risco |
 
 > Código: `FraudService`, `DailyDebitLimitRule` (`app/services/fraud.py`); `PaymentService._screen` (`app/services/payment.py`).
 
@@ -240,7 +241,7 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 
 | ID | Ameaça | Probabilidade (MVP público) | Impacto | Status | Mitigação atual / planejada |
 |---|---|---|---|---|---|
-| R01 | Brute force em login | Média | Médio | Aberto | SC04 (mensagem genérica); roadmap: rate limit |
+| R01 | Brute force em login | Média | Médio | Mitigado (parcial) | SC04 (mensagem genérica); `RATE_LIMIT_AUTH` |
 | R02 | Bypass KYC via `/dev/verify-me` | Alta | Alto | Mitigado | LC01 - gateado por `DEBUG` (`require_debug`), retorna 404 em produção |
 | R03 | Crédito fraudulento via `/pay` | Baixa | Alto | Mitigado | LC02 - `X-Webhook-Secret` |
 | R04 | Token JWT roubado | Baixa | Médio | Parcial | SC02 (expiração); LC07 (sem revogação) |
@@ -250,7 +251,7 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | R08 | Enumeração no cadastro | Média | Baixo | Aceito (MVP) | LC04 |
 | R09 | Overdraft por concorrência | Média | Alto | Mitigado | Ledger + `SELECT FOR UPDATE` (RN05, RN06) |
 | R10 | Crédito duplicado em webhook | Média | Alto | Mitigado | RN09; `confirm_deposit` com lock na transação |
-| R11 | Movimentação de saída de alto risco | Média | Alto | Mitigado (parcial) | Antifraude RN18-RN21; limite diário sem lock (LC08) |
+| R11 | Movimentação de saída de alto risco | Média | Alto | Mitigado | Antifraude RN18-RN21; lock em `FraudService.evaluate` |
 
 ---
 
@@ -264,9 +265,9 @@ Ordem sugerida de evolução (cada item = commit/PR visível no GitHub):
 | 2 | ~~`X-Webhook-Secret` em `/pix/deposit/{txid}/pay`~~ **(entregue)** | Baixo |
 | 3 | ~~Falhar no startup com segredos default em produção~~ **(entregue - `_reject_default_secrets_in_production`)** | Baixo |
 | 4 | ~~Checar `AccountStatus.BLOCKED` nas dependências~~ **(entregue)** | Baixo |
-| 5 | Rate limiting (`slowapi`) em login e register | Médio |
+| 5 | ~~Rate limiting (`slowapi`) em login e register~~ **(entregue)** | Médio |
 | 6 | ~~`FraudService` com regras básicas~~ **(entregue - RN18-RN21)** | Médio |
-| 7 | Serializar limite diário de antifraude (lock por conta/janela) | Médio |
+| 7 | ~~Serializar limite diário de antifraude (lock por conta/janela)~~ **(entregue)** | Médio |
 | 8 | KYC com upload e máquina de estados | Alto |
 | 9 | Webhook assíncrono com assinatura HMAC | Alto |
 

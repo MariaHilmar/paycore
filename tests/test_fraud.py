@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 
 import pytest
@@ -24,34 +25,38 @@ def ctx(account_id, amount_cents, tx_type=TransactionType.P2P) -> FraudContext:
 
 @pytest.mark.asyncio
 async def test_amount_rule_blocks_above_block_threshold(db_session):
+    account = await create_verified_account(db_session)
     engine = FraudService(
         db_session, rules=[AmountThresholdRule(review_cents=100, block_cents=1_000)]
     )
-    result = await engine.evaluate(ctx(uuid.uuid4(), 1_000))
+    result = await engine.evaluate(ctx(account.id, 1_000))
     assert result.status == FraudStatus.BLOCKED
 
 
 @pytest.mark.asyncio
 async def test_amount_rule_reviews_between_thresholds(db_session):
+    account = await create_verified_account(db_session)
     engine = FraudService(
         db_session, rules=[AmountThresholdRule(review_cents=100, block_cents=1_000)]
     )
-    result = await engine.evaluate(ctx(uuid.uuid4(), 500))
+    result = await engine.evaluate(ctx(account.id, 500))
     assert result.status == FraudStatus.REVIEW
 
 
 @pytest.mark.asyncio
 async def test_amount_rule_approves_below_thresholds(db_session):
+    account = await create_verified_account(db_session)
     engine = FraudService(
         db_session, rules=[AmountThresholdRule(review_cents=100, block_cents=1_000)]
     )
-    result = await engine.evaluate(ctx(uuid.uuid4(), 50))
+    result = await engine.evaluate(ctx(account.id, 50))
     assert result.status == FraudStatus.APPROVED
     assert result.is_approved
 
 
 @pytest.mark.asyncio
 async def test_engine_takes_the_most_severe_outcome(db_session):
+    account = await create_verified_account(db_session)
     # One rule says REVIEW, another says BLOCKED -> aggregate must be BLOCKED.
     engine = FraudService(
         db_session,
@@ -60,7 +65,7 @@ async def test_engine_takes_the_most_severe_outcome(db_session):
             DailyDebitLimitRule(limit_cents=0),  # -> BLOCKED (any amount exceeds 0)
         ],
     )
-    result = await engine.evaluate(ctx(uuid.uuid4(), 500))
+    result = await engine.evaluate(ctx(account.id, 500))
     assert result.status == FraudStatus.BLOCKED
     assert {o.status for o in result.triggered} == {FraudStatus.REVIEW, FraudStatus.BLOCKED}
 
@@ -102,6 +107,38 @@ async def test_daily_limit_counts_prior_debits(db_session):
     engine = FraudService(db_session, rules=[DailyDebitLimitRule(limit_cents=10_000)])
     result = await engine.evaluate(ctx(alice.id, 5_000))
     assert result.status == FraudStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_concurrent_transfers_respect_daily_debit_limit(db_session, session_factory):
+    """Two debits racing on the same account cannot slip past the 24h limit together."""
+    alice = await create_verified_account(db_session, funded_cents=100_000)
+    bob = await create_verified_account(db_session, funded_cents=0)
+    daily_rule = DailyDebitLimitRule(limit_cents=10_000)
+
+    async def attempt_transfer() -> tuple[TransactionStatus, FraudStatus | None]:
+        async with session_factory() as session:
+            payment = PaymentService(
+                session,
+                fraud=FraudService(session, rules=[daily_rule]),
+            )
+            try:
+                transfer = await payment.create_transfer(
+                    from_account_id=alice.id,
+                    to_account_number=bob.account_number,
+                    amount_cents=6_000,
+                    idempotency_key=str(uuid.uuid4()),
+                )
+                return transfer.status, transfer.fraud_status
+            except FraudBlockedError:
+                return TransactionStatus.FAILED, FraudStatus.BLOCKED
+
+    results = await asyncio.gather(attempt_transfer(), attempt_transfer())
+
+    completed = [status for status, _ in results if status == TransactionStatus.COMPLETED]
+    blocked = [fraud for _, fraud in results if fraud == FraudStatus.BLOCKED]
+    assert len(completed) == 1
+    assert len(blocked) == 1
 
 
 # --- Integration with PaymentService -----------------------------------------

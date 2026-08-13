@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     FRAUD_VELOCITY_MAX_DEBITS: int = 5  # reaching this many debits in the window -> review
     FRAUD_DAILY_DEBIT_LIMIT_CENTS: int = 10_000_000  # R$ 100.000,00 in 24h -> block
 
+    # Rate limiting (slowapi format, e.g. "10/minute")
+    RATE_LIMIT_AUTH: str = "10/minute"
+    RATE_LIMIT_WEBHOOK: str = "60/minute"
+
     # API
     API_V1_STR: str = "/api/v1"
 

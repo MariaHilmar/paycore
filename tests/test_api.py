@@ -403,3 +403,57 @@ async def test_blocked_account_cannot_deposit(client: AsyncClient):
     )
     assert resp.status_code == 403
     assert resp.json()["detail"] == "account is blocked"
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    from app.core.rate_limit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limited(client: AsyncClient, monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_AUTH", "2/minute")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    payload = {"email": "nobody@test.dev", "password": "wrong-password"}
+    assert (await client.post("/api/v1/auth/login", json=payload)).status_code == 401
+    assert (await client.post("/api/v1/auth/login", json=payload)).status_code == 401
+    resp = await client.post("/api/v1/auth/login", json=payload)
+    assert resp.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_webhook_pay_rate_limited(client: AsyncClient, monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_WEBHOOK", "2/minute")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    token, _ = await _register_verified(client)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": str(uuid.uuid4()),
+    }
+    deposit = await client.post(
+        "/api/v1/pix/deposit",
+        headers=headers,
+        json={"amount_cents": 1_000},
+    )
+    assert deposit.status_code == 201
+    txid = deposit.json()["txid"]
+
+    webhook_headers = _webhook_headers()
+    assert (
+        await client.post(f"/api/v1/pix/deposit/{txid}/pay", headers=webhook_headers)
+    ).status_code == 200
+    assert (
+        await client.post(f"/api/v1/pix/deposit/{txid}/pay", headers=webhook_headers)
+    ).status_code == 200
+    resp = await client.post(f"/api/v1/pix/deposit/{txid}/pay", headers=webhook_headers)
+    assert resp.status_code == 429
