@@ -46,9 +46,7 @@ def test_production_rejects_default_admin_key():
 
 
 def test_production_reports_every_insecure_default_at_once():
-    with pytest.raises(
-        ValidationError, match="SECRET_KEY, ADMIN_API_KEY, WEBHOOK_SECRET"
-    ):
+    with pytest.raises(ValidationError, match="SECRET_KEY, ADMIN_API_KEY, WEBHOOK_SECRET"):
         Settings(
             DEBUG=False,
             SECRET_KEY=DEFAULT_SECRET_KEY,
