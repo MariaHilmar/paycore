@@ -441,7 +441,7 @@ Resumo dos controles implementados. Para análise completa (controles SC01-SC11,
 | Validação de token | `sub` malformado (não-UUID) → **401**, não 500. |
 | Autorização KYC | Dependência `VerifiedAccount` centraliza a regra; rotas não a duplicam. |
 | Autorização de recurso | `GET /transfers/{id}` só devolve a transferência se a conta atual for origem ou destino. |
-| Webhook PIX | `/pay` é intencionalmente **não autenticado** — simula um callback servidor-a-servidor, não uma ação de usuário. |
+| Webhook PIX | `/pay` exige `X-Webhook-Secret` (callback servidor-a-servidor, sem JWT de usuário). |
 | Endpoints admin | Protegidos por `X-Admin-Key` (service-to-service), comparada em tempo constante com `secrets.compare_digest`. |
 | Antifraude | Transferências e saques passam por triagem de risco antes de liquidar (§5.4); suspeitos são bloqueados ou retidos para revisão manual. |
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import decode_access_token
-from app.db.models import Account, User
+from app.db.models import Account, AccountStatus, User
 from app.db.session import get_db
 from app.services.payment import PaymentService
 
@@ -75,6 +75,11 @@ async def get_verified_account(user: CurrentUser, account: CurrentAccount) -> Ac
             status_code=status.HTTP_403_FORBIDDEN,
             detail="account must pass KYC verification before moving money",
         )
+    if account.status == AccountStatus.BLOCKED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account is blocked",
+        )
     return account
 
 
@@ -124,6 +129,21 @@ async def require_admin(
 
 
 AdminGuard = Depends(require_admin)
+
+
+async def require_webhook_secret(
+    webhook_secret: Annotated[str | None, Header(alias="X-Webhook-Secret")] = None,
+) -> None:
+    """Guards the simulated PIX settlement callback with a shared secret."""
+    expected = get_settings().WEBHOOK_SECRET
+    if not webhook_secret or not secrets.compare_digest(webhook_secret, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or missing webhook secret",
+        )
+
+
+WebhookGuard = Depends(require_webhook_secret)
 
 
 def get_payment_service(session: SessionDep) -> PaymentService:

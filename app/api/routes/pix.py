@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from app.api.deps import IdempotencyKey, PaymentServiceDep, VerifiedAccount
+from app.api.deps import IdempotencyKey, PaymentServiceDep, VerifiedAccount, WebhookGuard
 from app.schemas.transaction import (
     PixDepositCreate,
     PixDepositOut,
@@ -59,12 +59,11 @@ async def create_withdrawal(
     )
 
 
-@router.post("/deposit/{txid}/pay", response_model=PixDepositOut)
+@router.post("/deposit/{txid}/pay", response_model=PixDepositOut, dependencies=[WebhookGuard])
 async def pay_deposit(txid: uuid.UUID, service: PaymentServiceDep) -> PixDepositOut:
     """Simulates the PIX network settling the payment - normally an async webhook.
 
-    Intentionally unauthenticated: it stands in for a server-to-server callback
-    from the PIX provider, not a user-facing action.
+    Protected with ``X-Webhook-Secret`` so only the configured PSP callback can credit deposits.
     """
     transaction = await service.confirm_deposit(txid)
     return _to_out(transaction)

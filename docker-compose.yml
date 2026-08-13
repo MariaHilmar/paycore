@@ -21,6 +21,8 @@ services:
       DATABASE_URL: postgresql+psycopg://paycore:paycore@db:5432/paycore
       SECRET_KEY: dev-secret-key-change-in-production
       ADMIN_API_KEY: dev-admin-key-change-in-production
+      WEBHOOK_SECRET: dev-webhook-secret-change-in-production
+      DEBUG: "true"
     ports:
       - "8000:8000"
     depends_on:

@@ -163,7 +163,7 @@ DEPOSITO=$(curl -s -X POST $BASE/pix/deposit \
 echo $DEPOSITO | jq
 TXID=$(echo $DEPOSITO | jq -r .txid)
 
-curl -s -X POST $BASE/pix/deposit/$TXID/pay | jq
+curl -s -X POST $BASE/pix/deposit/$TXID/pay -H "X-Webhook-Secret: $WEBHOOK_SECRET" | jq
 
 # 5. Conferir o saldo (deve ser 20000 centavos = R$ 200,00)
 curl -s $BASE/accounts/me -H "Authorization: Bearer $TOKEN" | jq
@@ -193,7 +193,7 @@ curl -s -X POST $BASE/transfers \
 | GET | `/api/v1/accounts/me` | Dados da conta + saldo em tempo real |
 | GET | `/api/v1/accounts/me/statement` | Extrato paginado (histórico do ledger) |
 | POST | `/api/v1/pix/deposit` | Cria cobrança PIX (retorna txid + QR mock) |
-| POST | `/api/v1/pix/deposit/{txid}/pay` | Simula a liquidação PIX → credita o ledger |
+| POST | `/api/v1/pix/deposit/{txid}/pay` | Simula a liquidação PIX (header `X-Webhook-Secret`) |
 | POST | `/api/v1/pix/withdraw` | Saque PIX (debita a conta / credita o settlement) |
 | POST | `/api/v1/transfers` | Transferência P2P por número de conta |
 | GET | `/api/v1/transfers/{id}` | Detalhe de uma transferência |
