@@ -445,7 +445,7 @@ Resumo dos controles implementados. Para análise completa (controles SC01-SC11,
 | Endpoints admin | Protegidos por `X-Admin-Key` (service-to-service), comparada em tempo constante com `secrets.compare_digest`. |
 | Antifraude | Transferências e saques passam por triagem de risco antes de liquidar (§5.4); suspeitos são bloqueados ou retidos para revisão manual. |
 
-> ⚠️ **Limitações conscientes do MVP** (documentadas em [`SEGURANCA.md`](SEGURANCA.md)): `/dev/verify-me` aberto para demo, `/pay` sem assinatura de webhook, sem rate limiting. A antifraude cobre valor/velocidade/limite diário, mas não substitui scoring com histórico e listas. Não faça deploy público sem tratar esses pontos.
+> ⚠️ **Limitações conscientes do MVP** (documentadas em [`SEGURANCA.md`](SEGURANCA.md)): `/dev/verify-me` aberto para demo em `DEBUG`, webhook `/pay` com secret compartilhado (sem HMAC do PSP), rate limiting in-memory (não distribuído). A antifraude cobre valor/velocidade/limite diário com lock por conta, mas não substitui scoring com histórico e listas. Não faça deploy público sem tratar os itens abertos no roadmap.
 
 ---
 

@@ -1,6 +1,8 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 
 from app.api.deps import CurrentUser, DebugOnly, SessionDep
+from app.core.config import get_settings
+from app.core.rate_limit import limiter
 from app.core.security import create_access_token
 from app.schemas.auth import Token, UserLogin, UserOut, UserRegister
 from app.services.auth import AuthService
@@ -9,13 +11,15 @@ router = APIRouter(tags=["auth"])
 
 
 @router.post("/auth/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def register(data: UserRegister, session: SessionDep) -> UserOut:
+@limiter.limit(lambda: get_settings().RATE_LIMIT_AUTH)
+async def register(request: Request, data: UserRegister, session: SessionDep) -> UserOut:
     user = await AuthService(session).register(data)
     return UserOut.model_validate(user)
 
 
 @router.post("/auth/login", response_model=Token)
-async def login(data: UserLogin, session: SessionDep) -> Token:
+@limiter.limit(lambda: get_settings().RATE_LIMIT_AUTH)
+async def login(request: Request, data: UserLogin, session: SessionDep) -> Token:
     user = await AuthService(session).authenticate(data.email, data.password)
     return Token(access_token=create_access_token(subject=str(user.id)))
 

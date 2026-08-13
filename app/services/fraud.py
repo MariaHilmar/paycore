@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.db.models import FraudStatus, LedgerEntry, LedgerEntryType, TransactionType
+from app.db.models import Account, FraudStatus, LedgerEntry, LedgerEntryType, TransactionType
 
 # Severity ordering so the engine can pick the most severe outcome across rules.
 _SEVERITY: dict[FraudStatus, int] = {
@@ -171,7 +171,20 @@ class FraudService:
         self.session = session
         self.rules = rules if rules is not None else default_rules()
 
+    async def _lock_paying_account(self, account_id: uuid.UUID) -> None:
+        """Serialize concurrent screenings for the same paying account.
+
+        Without this lock, two outbound transactions racing on the same account
+        can both read the 24h debit total before either posts a ledger entry,
+        letting them slip past ``DailyDebitLimitRule``.
+        """
+        stmt = select(Account).where(Account.id == account_id).with_for_update()
+        result = await self.session.execute(stmt)
+        if result.scalar_one_or_none() is None:
+            raise ValueError(f"account not found: {account_id}")
+
     async def evaluate(self, ctx: FraudContext) -> FraudEvaluation:
+        await self._lock_paying_account(ctx.account_id)
         triggered: list[RuleOutcome] = []
         for rule in self.rules:
             outcome = await rule.evaluate(self.session, ctx)
