@@ -49,7 +49,7 @@ Este documento existe para **tornar explícitas** as escolhas de segurança - in
 | **Idempotency-Key** | Header que impede dupla cobrança em retries de requisições financeiras |
 | **IDOR** | *Insecure Direct Object Reference* - acesso a recurso de outro usuário manipulando identificadores |
 | **Timing attack** | Inferência de segredo comparando tempos de resposta de comparações de string |
-| **Webhook mock** | Endpoint `/pix/deposit/{txid}/pay` que simula callback da rede PIX sem autenticação de usuário |
+| **Webhook mock** | Endpoint `/pix/deposit/{txid}/pay` que simula callback da rede PIX com `X-Webhook-Secret` |
 | **Service-to-service key** | `X-Admin-Key` para endpoints operacionais (`/admin/*`), separada do JWT de usuário |
 
 ---
@@ -61,7 +61,7 @@ Este documento existe para **tornar explícitas** as escolhas de segurança - in
 | `POST /auth/register`, `POST /auth/login` | Pública | Enumeração de contas, brute force de senha |
 | `POST /dev/verify-me` | JWT usuário + `DEBUG` | Bypass de KYC — mitigado: 404 quando `DEBUG=false` |
 | `POST /pix/deposit`, `/withdraw`, `/transfers` | JWT + KYC + Idempotency-Key | Uso indevido por conta verificada |
-| `POST /pix/deposit/{txid}/pay` | **Nenhuma** (webhook simulado) | Crédito fraudulento se `txid` for conhecido |
+| `POST /pix/deposit/{txid}/pay` | Header `X-Webhook-Secret` | Crédito fraudulento se o secret vazar |
 | `GET /transfers/{id}` | JWT + checagem origem/destino | IDOR (mitigado) |
 | `GET /admin/reconciliation` | `X-Admin-Key` | Vazamento de integridade contábil |
 | `GET /health`, `GET /docs` | Pública | Information disclosure (superfície da API) |
@@ -153,14 +153,14 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 | **Mitigação** | **Entregue:** a rota é gateada pela dependência `require_debug`, que retorna **404** quando `DEBUG=false` — inacessível em produção, sem revelar sua existência. Limitação residual: continua sendo um atalho, não um KYC real (roadmap item 8: máquina de estados com upload) |
 | **Código** | `require_debug` (`app/api/deps.py`); `verify_me` com `dependencies=[DebugOnly]` (`app/api/routes/auth.py`); teste `tests/test_api.py::test_verify_me_is_gated_behind_debug` |
 
-### LC02 - Webhook PIX (`/pay`) sem autenticação
+### LC02 - Webhook PIX (`/pay`) ~~sem autenticação~~ **(secret compartilhado)**
 
 | | |
 |---|---|
-| **Risco** | Quem possuir o `txid` (UUID da transação `PENDING`) pode confirmar o depósito e creditar a conta |
-| **Justificativa** | Simula callback **servidor-a-servidor** da rede PIX; usuário final não chama esse endpoint em produção real |
-| **Mitigação em produção** | Assinatura HMAC do PSP, IP allowlist, secret compartilhado (`X-Webhook-Secret`), fila assíncrona |
-| **Código** | `pay_deposit` (`app/api/routes/pix.py`, linhas 73-87); docstring explicita ausência de auth (linhas 75-78) |
+| **Risco** | Quem possuir o `txid` poderia confirmar o depósito e creditar a conta |
+| **Justificativa** | Simula callback **servidor-a-servidor** da rede PIX; usuário final não chama esse endpoint |
+| **Mitigação** | **Entregue:** header `X-Webhook-Secret` comparado em tempo constante. Limitação residual: HMAC do PSP e fila assíncrona ficam no roadmap |
+| **Código** | `require_webhook_secret` (`app/api/deps.py`); `pay_deposit` com `dependencies=[WebhookGuard]` (`app/api/routes/pix.py`); teste `tests/test_api.py::test_pay_requires_webhook_secret` |
 
 ### LC03 - Sem rate limiting
 
@@ -180,14 +180,14 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 
 > Código: `register` (`app/api/routes/auth.py`, linhas 21-28).
 
-### LC05 - `AccountStatus.BLOCKED` não aplicado nas dependências
+### LC05 - `AccountStatus.BLOCKED` ~~não aplicado~~ **(checado nas dependências)**
 
 | | |
 |---|---|
-| **Risco** | Conta marcada como `BLOCKED` no modelo ainda poderia operar financeiramente |
-| **Justificativa** | Status existe para extensão futura; bloqueio operacional não foi requisito do MVP |
-| **Mitigação em produção** | Checar `account.status == ACTIVE` em `get_verified_account` ou dependência dedicada |
-| **Código** | `AccountStatus.BLOCKED` (`app/db/models.py`, linhas 21-23); ausência de checagem em `get_verified_account` (`app/api/deps.py`, linhas 66-77) |
+| **Risco** | Conta marcada como `BLOCKED` ainda poderia operar financeiramente |
+| **Justificativa** | Status existia no modelo sem regra de negócio no MVP inicial |
+| **Mitigação** | **Entregue:** `get_verified_account` recusa contas `BLOCKED` com 403. Limitação residual: não há fluxo admin para bloquear/desbloquear via API |
+| **Código** | `get_verified_account` (`app/api/deps.py`); teste `tests/test_api.py::test_blocked_account_cannot_deposit` |
 
 ### LC06 - Segredos com valores default em desenvolvimento ~~(deploy acidental)~~ **(startup bloqueado em produção)**
 
@@ -242,7 +242,7 @@ As ausências abaixo são **decisões de escopo** para um portfólio focado em l
 |---|---|---|---|---|---|
 | R01 | Brute force em login | Média | Médio | Aberto | SC04 (mensagem genérica); roadmap: rate limit |
 | R02 | Bypass KYC via `/dev/verify-me` | Alta | Alto | Mitigado | LC01 - gateado por `DEBUG` (`require_debug`), retorna 404 em produção |
-| R03 | Crédito fraudulento via `/pay` | Baixa-Média | Alto | Aceito (MVP) | LC02 - UUID dificulta adivinhação; roadmap: HMAC |
+| R03 | Crédito fraudulento via `/pay` | Baixa | Alto | Mitigado | LC02 - `X-Webhook-Secret` |
 | R04 | Token JWT roubado | Baixa | Médio | Parcial | SC02 (expiração); LC07 (sem revogação) |
 | R05 | IDOR em transferências | Baixa | Médio | Mitigado | SC07 |
 | R06 | Vazamento de chave admin | Baixa | Alto | Parcial | SC08, SC09; LC06 (startup bloqueia defaults em produção) |
@@ -261,9 +261,9 @@ Ordem sugerida de evolução (cada item = commit/PR visível no GitHub):
 | Ordem | Entrega | Esforço estimado |
 |---|---|---|
 | 1 | ~~Condicionar `/dev/verify-me` a `DEBUG=true`~~ **(entregue - `require_debug`, retorna 404 em produção)** | Baixo |
-| 2 | `X-Webhook-Secret` em `/pix/deposit/{txid}/pay` | Baixo |
+| 2 | ~~`X-Webhook-Secret` em `/pix/deposit/{txid}/pay`~~ **(entregue)** | Baixo |
 | 3 | ~~Falhar no startup com segredos default em produção~~ **(entregue - `_reject_default_secrets_in_production`)** | Baixo |
-| 4 | Checar `AccountStatus.BLOCKED` nas dependências | Baixo |
+| 4 | ~~Checar `AccountStatus.BLOCKED` nas dependências~~ **(entregue)** | Baixo |
 | 5 | Rate limiting (`slowapi`) em login e register | Médio |
 | 6 | ~~`FraudService` com regras básicas~~ **(entregue - RN18-RN21)** | Médio |
 | 7 | Serializar limite diário de antifraude (lock por conta/janela) | Médio |

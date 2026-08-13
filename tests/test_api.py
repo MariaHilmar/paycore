@@ -12,6 +12,12 @@ from app.main import app
 from tests.conftest import TEST_DATABASE_URL, random_cpf, random_email
 
 
+def _webhook_headers() -> dict[str, str]:
+    from app.core.config import get_settings
+
+    return {"X-Webhook-Secret": get_settings().WEBHOOK_SECRET}
+
+
 @pytest_asyncio.fixture
 async def client():
     """Full-stack HTTP client wired to the test database.
@@ -109,7 +115,9 @@ async def test_full_deposit_and_transfer_flow(client: AsyncClient):
     assert resp.status_code == 201
     txid = resp.json()["txid"]
 
-    resp = await client.post(f"/api/v1/pix/deposit/{txid}/pay")
+    resp = await client.post(
+        f"/api/v1/pix/deposit/{txid}/pay", headers=_webhook_headers()
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "COMPLETED"
 
@@ -203,7 +211,9 @@ async def test_deposit_then_withdraw_flow(client: AsyncClient):
         json={"amount_cents": 10_000},
     )
     txid = resp.json()["txid"]
-    await client.post(f"/api/v1/pix/deposit/{txid}/pay")
+    await client.post(
+        f"/api/v1/pix/deposit/{txid}/pay", headers=_webhook_headers()
+    )
 
     # Withdraw R$ 30,00
     resp = await client.post(
@@ -266,7 +276,9 @@ async def _fund(client: AsyncClient, headers: dict, amount_cents: int) -> None:
         json={"amount_cents": amount_cents},
     )
     txid = resp.json()["txid"]
-    await client.post(f"/api/v1/pix/deposit/{txid}/pay")
+    await client.post(
+        f"/api/v1/pix/deposit/{txid}/pay", headers=_webhook_headers()
+    )
 
 
 @pytest.mark.asyncio
@@ -338,7 +350,9 @@ async def test_reconciliation_reports_healthy_after_real_flows(client: AsyncClie
         json={"amount_cents": 20_000},
     )
     txid = resp.json()["txid"]
-    await client.post(f"/api/v1/pix/deposit/{txid}/pay")
+    await client.post(
+        f"/api/v1/pix/deposit/{txid}/pay", headers=_webhook_headers()
+    )
     await client.post(
         "/api/v1/transfers",
         headers={**alice_headers, "Idempotency-Key": str(uuid.uuid4())},
@@ -352,3 +366,50 @@ async def test_reconciliation_reports_healthy_after_real_flows(client: AsyncClie
     assert body["is_balanced"] is True
     assert body["total_debit_cents"] == body["total_credit_cents"]
     assert body["discrepancies"] == []
+
+
+@pytest.mark.asyncio
+async def test_pay_requires_webhook_secret(client: AsyncClient):
+    token, _ = await _register_verified(client)
+    resp = await client.post(
+        "/api/v1/pix/deposit",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={"amount_cents": 1_000},
+    )
+    txid = resp.json()["txid"]
+
+    missing = await client.post(f"/api/v1/pix/deposit/{txid}/pay")
+    assert missing.status_code == 401
+
+    wrong = await client.post(
+        f"/api/v1/pix/deposit/{txid}/pay",
+        headers={"X-Webhook-Secret": "wrong-secret"},
+    )
+    assert wrong.status_code == 401
+
+    ok = await client.post(
+        f"/api/v1/pix/deposit/{txid}/pay", headers=_webhook_headers()
+    )
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_blocked_account_cannot_deposit(client: AsyncClient):
+    from sqlalchemy import update
+
+    from app.db.models import Account, AccountStatus
+
+    token, _ = await _register_verified(client)
+    engine = create_async_engine(TEST_DATABASE_URL)
+    async with engine.begin() as conn:
+        await conn.execute(update(Account).values(status=AccountStatus.BLOCKED))
+    await engine.dispose()
+
+    resp = await client.post(
+        "/api/v1/pix/deposit",
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())},
+        json={"amount_cents": 1_000},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "account is blocked"

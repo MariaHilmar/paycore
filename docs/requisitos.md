@@ -57,7 +57,7 @@ O **PayCore** é um sistema de carteira digital (fintech) que oferece cadastro d
 | **Rede PIX (simulada)** | Sistema externo (mockado) | O endpoint `POST /pix/deposit/{txid}/pay` faz o papel de um callback/webhook da rede PIX confirmando a liquidação de um depósito. Não há integração real |
 | **Banco de dados** | Infraestrutura | PostgreSQL 16, acessado via SQLAlchemy 2.0 assíncrono (driver `psycopg` 3) |
 
-Não há autenticação de usuário final nos endpoints `GET /health` e `POST /pix/deposit/{txid}/pay` - o primeiro é público por design (health check); o segundo é intencionalmente não autenticado por simular um callback servidor-a-servidor, não uma ação de usuário.
+Não há autenticação de usuário final em `GET /health` (público por design). `POST /pix/deposit/{txid}/pay` não usa JWT: é callback servidor-a-servidor protegido por `X-Webhook-Secret`.
 
 ---
 

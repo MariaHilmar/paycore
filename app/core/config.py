@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings
 # outside development (see Settings._reject_default_secrets_in_production).
 DEFAULT_SECRET_KEY = "dev-secret-key-change-in-production"
 DEFAULT_ADMIN_API_KEY = "dev-admin-key-change-in-production"
+DEFAULT_WEBHOOK_SECRET = "dev-webhook-secret-change-in-production"
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,9 @@ class Settings(BaseSettings):
 
     # Admin (service-to-service key for internal/ops endpoints like reconciliation)
     ADMIN_API_KEY: str = DEFAULT_ADMIN_API_KEY
+
+    # PIX webhook simulation (server-to-server callback from the PSP)
+    WEBHOOK_SECRET: str = DEFAULT_WEBHOOK_SECRET
 
     # Fraud screening thresholds (all monetary values in cents)
     FRAUD_REVIEW_AMOUNT_CENTS: int = 500_000  # R$ 5.000,00 -> hold for manual review
@@ -55,6 +59,8 @@ class Settings(BaseSettings):
             insecure.append("SECRET_KEY")
         if self.ADMIN_API_KEY == DEFAULT_ADMIN_API_KEY:
             insecure.append("ADMIN_API_KEY")
+        if self.WEBHOOK_SECRET == DEFAULT_WEBHOOK_SECRET:
+            insecure.append("WEBHOOK_SECRET")
         if insecure:
             raise ValueError(
                 "Refusing to start with insecure default secrets while DEBUG=false: "
